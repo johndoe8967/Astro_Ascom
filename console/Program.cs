@@ -12,6 +12,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ASCOM
 {
@@ -39,8 +41,12 @@ namespace ASCOM
             Console.WriteLine("driverVersion " + device.DriverVersion);
 
             // TODO add more code to test the driver.
+            device.SiteLatitude = 48;
+            device.SiteLongitude = 14.28;
             device.Connected = true;
 
+            while (device.Declination == 0) { };
+            while (device.RightAscension == 0) { };
 
             device.Connected = false;
             Console.WriteLine("Press Enter to finish");

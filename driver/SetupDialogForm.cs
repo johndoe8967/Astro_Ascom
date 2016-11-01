@@ -24,7 +24,7 @@ namespace ASCOM.funky
         {
             // Place any validation constraint checks here
             // Update the state variables with results from the dialogue
-            Telescope.comPort = (string)comboBoxComPort.SelectedItem;
+            Telescope.hostname = (string)textBoxHostname.Text;
             Telescope.traceState = chkTrace.Checked;
         }
 
@@ -54,13 +54,7 @@ namespace ASCOM.funky
         {
             chkTrace.Checked = Telescope.traceState;
             // set the list of com ports to those that are currently available
-            comboBoxComPort.Items.Clear();
-            comboBoxComPort.Items.AddRange(System.IO.Ports.SerialPort.GetPortNames());      // use System.IO because it's static
-            // select the current port if possible
-            if (comboBoxComPort.Items.Contains(Telescope.comPort))
-            {
-                comboBoxComPort.SelectedItem = Telescope.comPort;
-            }
+            textBoxHostname.Text = Telescope.hostname;
         }
     }
 }

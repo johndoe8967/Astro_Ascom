@@ -39,9 +39,12 @@ using ASCOM.Utilities;
 using ASCOM.DeviceInterface;
 using System.Globalization;
 using System.Collections;
+using System.Net.WebSockets;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 
-namespace ASCOM.funky
-{
+namespace ASCOM.funky {
     //
     // Your driver's DeviceID is ASCOM.funky.Telescope
     //
@@ -58,8 +61,7 @@ namespace ASCOM.funky
     /// </summary>
     [Guid("9128cdd5-58e5-4c69-9614-f9dfd8fb8826")]
     [ClassInterface(ClassInterfaceType.None)]
-    public class Telescope : ITelescopeV3
-    {
+    public class Telescope : ITelescopeV3 {
         /// <summary>
         /// ASCOM DeviceID (COM ProgID) for this driver.
         /// The DeviceID is used by ASCOM applications to load the driver at runtime.
@@ -69,20 +71,25 @@ namespace ASCOM.funky
         /// <summary>
         /// Driver description that displays in the ASCOM Chooser.
         /// </summary>
-        private static string driverDescription = "ASCOM Telescope Driver for funky.";
+        private static string driverDescription = "ASCOM Telescope Driver for ASTRO_ESP.";
 
-        internal static string comPortProfileName = "COM Port"; // Constants used for Profile persistence
-        internal static string comPortDefault = "COM1";
+        internal static string hostnameProfileName = "Hostname"; // Constants used for Profile persistence
+        internal static string hostnameDefault = "Astro.local";
         internal static string traceStateProfileName = "Trace Level";
         internal static string traceStateDefault = "false";
 
-        internal static string comPort; // Variables to hold the currrent device configuration
+        internal static string hostname; // Variables to hold the currrent device configuration
         internal static bool traceState;
 
         /// <summary>
         /// Private variable to hold the connected state
         /// </summary>
         private bool connectedState;
+        internal bool connectionEstablished = false;
+        internal bool shouldConnect;
+
+        private double rightAscension;
+        private double declination;
 
         /// <summary>
         /// Private variable to hold an ASCOM Utilities object
@@ -100,21 +107,101 @@ namespace ASCOM.funky
         private TraceLogger tl;
 
         /// <summary>
+        /// Private async Task to work the websocket
+        /// </summary>
+
+        public class AstroMsg {
+            public string type { get; set; }
+            public string msg { get; set; }
+            public object value { get; set; }
+        }
+
+        async Task Client() {
+            ClientWebSocket ws = new ClientWebSocket();
+
+            var buffer = new byte[1024];
+            var segment = new ArraySegment<byte>(buffer);
+
+            while (true) {
+                if (shouldConnect) {
+                    if (!connectionEstablished) {
+                        var uri = new Uri("ws://" + hostname + ":80/");
+
+                        await ws.ConnectAsync(uri, CancellationToken.None);
+                    }
+
+                    var result = await ws.ReceiveAsync(segment, CancellationToken.None);
+
+                    if (result.MessageType == WebSocketMessageType.Close) {
+                        await ws.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                        return;
+                    }
+
+                    int count = result.Count;
+                    while (!result.EndOfMessage) {
+                        if (count >= buffer.Length) {
+                            await ws.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "That's too long", CancellationToken.None);
+                            return;
+                        }
+
+                        segment = new ArraySegment<byte>(buffer, count, buffer.Length - count);
+                        result = await ws.ReceiveAsync(segment, CancellationToken.None);
+                        count += result.Count;
+                    }
+
+                    var message = Encoding.UTF8.GetString(buffer, 0, count);
+                    Console.WriteLine(">" + message);
+                    AstroMsg data = JsonConvert.DeserializeObject<AstroMsg>(message);
+                    switch (data.msg) {
+                        case "incr0":
+                            if (double.TryParse((string)data.value, out declination)) {
+                                declination = declination / 2000 * 2 / 67 * 360;
+                                Console.WriteLine("Act: Declination" + declination);
+                            } else
+                                Console.WriteLine("INCR0 String could not be parsed:" + data.value);
+                            break;
+                        case "incr1":
+                            if (double.TryParse((string)data.value, out rightAscension)) {
+                                rightAscension = rightAscension / (4 * 12) / 250 * 20 / 80 * 24;
+                                rightAscension = SiderealTime - rightAscension;
+                                Console.WriteLine("Act: RightAscension: " + rightAscension);
+                            } else
+                                Console.WriteLine("INCR1 String could not be parsed:" + data.value);
+                            break;
+                        default:
+                            break;
+                    }
+
+                    connectionEstablished = true;
+
+                    //await ws.ConnectAsync(uri, CancellationToken.None);
+
+                } else {
+                    if (connectionEstablished) {
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "disconnect on purpose", CancellationToken.None);
+                    } else {
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "disconnect on purpose", CancellationToken.None);
+                    }
+                }
+            }
+        }
+
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="funky"/> class.
         /// Must be public for COM registration.
         /// </summary>
-        public Telescope()
-        {
+        public Telescope() {
             ReadProfile(); // Read device configuration from the ASCOM Profile store
 
-            tl = new TraceLogger("", "funky");
+            tl = new TraceLogger("", "Astro_ESP");
             tl.Enabled = traceState;
             tl.LogMessage("Telescope", "Starting initialisation");
 
             connectedState = false; // Initialise connected to false
             utilities = new Util(); //Initialise util object
             astroUtilities = new AstroUtils(); // Initialise astro utilities object
-            //TODO: Implement your additional construction here
+                                               //TODO: Implement your additional construction here
 
             tl.LogMessage("Telescope", "Completed initialisation");
         }
@@ -132,39 +219,32 @@ namespace ASCOM.funky
         /// the new settings are saved, otherwise the old values are reloaded.
         /// THIS IS THE ONLY PLACE WHERE SHOWING USER INTERFACE IS ALLOWED!
         /// </summary>
-        public void SetupDialog()
-        {
+        public void SetupDialog() {
             // consider only showing the setup dialog if not connected
             // or call a different dialog if connected
             if (IsConnected)
                 System.Windows.Forms.MessageBox.Show("Already connected, just press OK");
 
-            using (SetupDialogForm F = new SetupDialogForm())
-            {
+            using (SetupDialogForm F = new SetupDialogForm()) {
                 var result = F.ShowDialog();
-                if (result == System.Windows.Forms.DialogResult.OK)
-                {
+                if (result == System.Windows.Forms.DialogResult.OK) {
                     WriteProfile(); // Persist device configuration values to the ASCOM Profile store
                 }
             }
         }
 
-        public ArrayList SupportedActions
-        {
-            get
-            {
+        public ArrayList SupportedActions {
+            get {
                 tl.LogMessage("SupportedActions Get", "Returning empty arraylist");
                 return new ArrayList();
             }
         }
 
-        public string Action(string actionName, string actionParameters)
-        {
+        public string Action(string actionName, string actionParameters) {
             throw new ASCOM.ActionNotImplementedException("Action " + actionName + " is not implemented by this driver");
         }
 
-        public void CommandBlind(string command, bool raw)
-        {
+        public void CommandBlind(string command, bool raw) {
             CheckConnected("CommandBlind");
             // Call CommandString and return as soon as it finishes
             this.CommandString(command, raw);
@@ -173,8 +253,7 @@ namespace ASCOM.funky
             // DO NOT have both these sections!  One or the other
         }
 
-        public bool CommandBool(string command, bool raw)
-        {
+        public bool CommandBool(string command, bool raw) {
             CheckConnected("CommandBool");
             string ret = CommandString(command, raw);
             // TODO decode the return string and return true or false
@@ -183,8 +262,7 @@ namespace ASCOM.funky
             // DO NOT have both these sections!  One or the other
         }
 
-        public string CommandString(string command, bool raw)
-        {
+        public string CommandString(string command, bool raw) {
             CheckConnected("CommandString");
             // it's a good idea to put all the low level communication with the device here,
             // then all communication calls this function
@@ -193,8 +271,7 @@ namespace ASCOM.funky
             throw new ASCOM.MethodNotImplementedException("CommandString");
         }
 
-        public void Dispose()
-        {
+        public void Dispose() {
             // Clean up the tracelogger and util objects
             tl.Enabled = false;
             tl.Dispose();
@@ -205,48 +282,45 @@ namespace ASCOM.funky
             astroUtilities = null;
         }
 
-        public bool Connected
-        {
-            get
-            {
+        public bool Connected {
+            get {
                 tl.LogMessage("Connected Get", IsConnected.ToString());
                 return IsConnected;
             }
-            set
-            {
+            set {
                 tl.LogMessage("Connected Set", value.ToString());
                 if (value == IsConnected)
                     return;
 
-                if (value)
-                {
+                if (value) {
+                    tl.LogMessage("Connected Set", "Connecting to host " + hostname);
+
+                    var uri = new Uri("ws://" + hostname + ":80");
+
+                    shouldConnect = true;
+                    var clientTask1 = Client();
+                    while (!connectionEstablished) { }
                     connectedState = true;
-                    tl.LogMessage("Connected Set", "Connecting to port " + comPort);
-                    // TODO connect to the device
-                }
-                else
-                {
+
+
+                } else {
+                    shouldConnect = false;
                     connectedState = false;
-                    tl.LogMessage("Connected Set", "Disconnecting from port " + comPort);
-                    // TODO disconnect from the device
+                    tl.LogMessage("Connected Set", "Disconnecting from host " + hostname);
                 }
             }
         }
 
-        public string Description
-        {
+        public string Description {
             // TODO customise this device description
-            get
-            {
+            get {
                 tl.LogMessage("Description Get", driverDescription);
                 return driverDescription;
             }
         }
 
-        public string DriverInfo
-        {
-            get
-            {
+        public string DriverInfo {
+            get {
                 Version version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 // TODO customise this driver description
                 string driverInfo = "Information about the driver itself. Version: " + String.Format(CultureInfo.InvariantCulture, "{0}.{1}", version.Major, version.Minor);
@@ -255,10 +329,8 @@ namespace ASCOM.funky
             }
         }
 
-        public string DriverVersion
-        {
-            get
-            {
+        public string DriverVersion {
+            get {
                 Version version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 string driverVersion = String.Format(CultureInfo.InvariantCulture, "{0}.{1}", version.Major, version.Minor);
                 tl.LogMessage("DriverVersion Get", driverVersion);
@@ -266,20 +338,16 @@ namespace ASCOM.funky
             }
         }
 
-        public short InterfaceVersion
-        {
+        public short InterfaceVersion {
             // set by the driver wizard
-            get
-            {
+            get {
                 tl.LogMessage("InterfaceVersion Get", "3");
                 return Convert.ToInt16("3");
             }
         }
 
-        public string Name
-        {
-            get
-            {
+        public string Name {
+            get {
                 string name = "Short driver name - please customise";
                 tl.LogMessage("Name Get", name);
                 return name;
@@ -289,95 +357,75 @@ namespace ASCOM.funky
         #endregion
 
         #region ITelescope Implementation
-        public void AbortSlew()
-        {
+        public void AbortSlew() {
             tl.LogMessage("AbortSlew", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("AbortSlew");
         }
 
-        public AlignmentModes AlignmentMode
-        {
-            get
-            {
+        public AlignmentModes AlignmentMode {
+            get {
                 tl.LogMessage("AlignmentMode Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("AlignmentMode", false);
             }
         }
 
-        public double Altitude
-        {
-            get
-            {
+        public double Altitude {
+            get {
                 tl.LogMessage("Altitude", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("Altitude", false);
             }
         }
 
-        public double ApertureArea
-        {
-            get
-            {
+        public double ApertureArea {
+            get {
                 tl.LogMessage("ApertureArea Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("ApertureArea", false);
             }
         }
 
-        public double ApertureDiameter
-        {
-            get
-            {
+        public double ApertureDiameter {
+            get {
                 tl.LogMessage("ApertureDiameter Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("ApertureDiameter", false);
             }
         }
 
-        public bool AtHome
-        {
-            get
-            {
+        public bool AtHome {
+            get {
                 tl.LogMessage("AtHome", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool AtPark
-        {
-            get
-            {
+        public bool AtPark {
+            get {
                 tl.LogMessage("AtPark", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public IAxisRates AxisRates(TelescopeAxes Axis)
-        {
+        public IAxisRates AxisRates(TelescopeAxes Axis) {
             tl.LogMessage("AxisRates", "Get - " + Axis.ToString());
             return new AxisRates(Axis);
         }
 
-        public double Azimuth
-        {
-            get
-            {
+        public double Azimuth {
+            get {
                 tl.LogMessage("Azimuth Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("Azimuth", false);
             }
         }
 
-        public bool CanFindHome
-        {
-            get
-            {
+        public bool CanFindHome {
+            get {
                 tl.LogMessage("CanFindHome", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanMoveAxis(TelescopeAxes Axis)
-        {
+        public bool CanMoveAxis(TelescopeAxes Axis) {
             tl.LogMessage("CanMoveAxis", "Get - " + Axis.ToString());
-            switch (Axis)
-            {
+            switch (Axis) {
                 case TelescopeAxes.axisPrimary: return false;
                 case TelescopeAxes.axisSecondary: return false;
                 case TelescopeAxes.axisTertiary: return false;
@@ -385,322 +433,255 @@ namespace ASCOM.funky
             }
         }
 
-        public bool CanPark
-        {
-            get
-            {
+        public bool CanPark {
+            get {
                 tl.LogMessage("CanPark", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanPulseGuide
-        {
-            get
-            {
+        public bool CanPulseGuide {
+            get {
                 tl.LogMessage("CanPulseGuide", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetDeclinationRate
-        {
-            get
-            {
+        public bool CanSetDeclinationRate {
+            get {
                 tl.LogMessage("CanSetDeclinationRate", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetGuideRates
-        {
-            get
-            {
+        public bool CanSetGuideRates {
+            get {
                 tl.LogMessage("CanSetGuideRates", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetPark
-        {
-            get
-            {
+        public bool CanSetPark {
+            get {
                 tl.LogMessage("CanSetPark", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetPierSide
-        {
-            get
-            {
+        public bool CanSetPierSide {
+            get {
                 tl.LogMessage("CanSetPierSide", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetRightAscensionRate
-        {
-            get
-            {
+        public bool CanSetRightAscensionRate {
+            get {
                 tl.LogMessage("CanSetRightAscensionRate", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSetTracking
-        {
-            get
-            {
+        public bool CanSetTracking {
+            get {
                 tl.LogMessage("CanSetTracking", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSlew
-        {
-            get
-            {
+        public bool CanSlew {
+            get {
                 tl.LogMessage("CanSlew", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSlewAltAz
-        {
-            get
-            {
+        public bool CanSlewAltAz {
+            get {
                 tl.LogMessage("CanSlewAltAz", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSlewAltAzAsync
-        {
-            get
-            {
+        public bool CanSlewAltAzAsync {
+            get {
                 tl.LogMessage("CanSlewAltAzAsync", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSlewAsync
-        {
-            get
-            {
+        public bool CanSlewAsync {
+            get {
                 tl.LogMessage("CanSlewAsync", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSync
-        {
-            get
-            {
+        public bool CanSync {
+            get {
                 tl.LogMessage("CanSync", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanSyncAltAz
-        {
-            get
-            {
+        public bool CanSyncAltAz {
+            get {
                 tl.LogMessage("CanSyncAltAz", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public bool CanUnpark
-        {
-            get
-            {
+        public bool CanUnpark {
+            get {
                 tl.LogMessage("CanUnpark", "Get - " + false.ToString());
                 return false;
             }
         }
 
-        public double Declination
-        {
-            get
-            {
-                double declination = 0.0;
+        public double Declination {
+            get {
+                //double declination = 0.0;
                 tl.LogMessage("Declination", "Get - " + utilities.DegreesToDMS(declination, ":", ":"));
                 return declination;
             }
         }
 
-        public double DeclinationRate
-        {
-            get
-            {
+        public double DeclinationRate {
+            get {
                 double declination = 0.0;
                 tl.LogMessage("DeclinationRate", "Get - " + declination.ToString());
                 return declination;
             }
-            set
-            {
+            set {
                 tl.LogMessage("DeclinationRate Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("DeclinationRate", true);
             }
         }
 
-        public PierSide DestinationSideOfPier(double RightAscension, double Declination)
-        {
+        public PierSide DestinationSideOfPier(double RightAscension, double Declination) {
             tl.LogMessage("DestinationSideOfPier Get", "Not implemented");
             throw new ASCOM.PropertyNotImplementedException("DestinationSideOfPier", false);
         }
 
-        public bool DoesRefraction
-        {
-            get
-            {
+        public bool DoesRefraction {
+            get {
                 tl.LogMessage("DoesRefraction Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("DoesRefraction", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("DoesRefraction Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("DoesRefraction", true);
             }
         }
 
-        public EquatorialCoordinateType EquatorialSystem
-        {
-            get
-            {
+        public EquatorialCoordinateType EquatorialSystem {
+            get {
                 EquatorialCoordinateType equatorialSystem = EquatorialCoordinateType.equLocalTopocentric;
                 tl.LogMessage("DeclinationRate", "Get - " + equatorialSystem.ToString());
                 return equatorialSystem;
             }
         }
 
-        public void FindHome()
-        {
+        public void FindHome() {
             tl.LogMessage("FindHome", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("FindHome");
         }
 
-        public double FocalLength
-        {
-            get
-            {
+        public double FocalLength {
+            get {
                 tl.LogMessage("FocalLength Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("FocalLength", false);
             }
         }
 
-        public double GuideRateDeclination
-        {
-            get
-            {
+        public double GuideRateDeclination {
+            get {
                 tl.LogMessage("GuideRateDeclination Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateDeclination", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("GuideRateDeclination Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateDeclination", true);
             }
         }
 
-        public double GuideRateRightAscension
-        {
-            get
-            {
+        public double GuideRateRightAscension {
+            get {
                 tl.LogMessage("GuideRateRightAscension Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateRightAscension", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("GuideRateRightAscension Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateRightAscension", true);
             }
         }
 
-        public bool IsPulseGuiding
-        {
-            get
-            {
+        public bool IsPulseGuiding {
+            get {
                 tl.LogMessage("IsPulseGuiding Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("IsPulseGuiding", false);
             }
         }
 
-        public void MoveAxis(TelescopeAxes Axis, double Rate)
-        {
+        public void MoveAxis(TelescopeAxes Axis, double Rate) {
             tl.LogMessage("MoveAxis", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("MoveAxis");
         }
 
-        public void Park()
-        {
+        public void Park() {
             tl.LogMessage("Park", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("Park");
         }
 
-        public void PulseGuide(GuideDirections Direction, int Duration)
-        {
+        public void PulseGuide(GuideDirections Direction, int Duration) {
             tl.LogMessage("PulseGuide", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("PulseGuide");
         }
 
-        public double RightAscension
-        {
-            get
-            {
-                double rightAscension = 0.0;
+        public double RightAscension {
+            get {
+                //double rightAscension = 0.0;
                 tl.LogMessage("RightAscension", "Get - " + utilities.HoursToHMS(rightAscension));
                 return rightAscension;
             }
         }
 
-        public double RightAscensionRate
-        {
-            get
-            {
+        public double RightAscensionRate {
+            get {
                 double rightAscensionRate = 0.0;
                 tl.LogMessage("RightAscensionRate", "Get - " + rightAscensionRate.ToString());
                 return rightAscensionRate;
             }
-            set
-            {
+            set {
                 tl.LogMessage("RightAscensionRate Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("RightAscensionRate", true);
             }
         }
 
-        public void SetPark()
-        {
+        public void SetPark() {
             tl.LogMessage("SetPark", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SetPark");
         }
 
-        public PierSide SideOfPier
-        {
-            get
-            {
+        public PierSide SideOfPier {
+            get {
                 tl.LogMessage("SideOfPier Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SideOfPier", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("SideOfPier Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SideOfPier", true);
             }
         }
 
-        public double SiderealTime
-        {
-            get
-            {
+        public double SiderealTime {
+            get {
                 // get greenwich sidereal time: https://en.wikipedia.org/wiki/Sidereal_time
                 //double siderealTime = (18.697374558 + 24.065709824419081 * (utilities.DateUTCToJulian(DateTime.UtcNow) - 2451545.0));
 
                 // alternative using NOVAS 3.1
                 double siderealTime = 0.0;
-                using (var novas = new ASCOM.Astrometry.NOVAS.NOVAS31())
-                {
+                using (var novas = new ASCOM.Astrometry.NOVAS.NOVAS31()) {
                     var jd = utilities.DateUTCToJulian(DateTime.UtcNow);
                     novas.SiderealTime(jd, 0, novas.DeltaT(jd),
                         ASCOM.Astrometry.GstType.GreenwichApparentSiderealTime,
@@ -716,213 +697,182 @@ namespace ASCOM.funky
             }
         }
 
-        public double SiteElevation
-        {
-            get
-            {
+        public double SiteElevation {
+            get {
                 tl.LogMessage("SiteElevation Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SiteElevation", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("SiteElevation Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SiteElevation", true);
             }
         }
 
-        public double SiteLatitude
-        {
-            get
-            {
-                tl.LogMessage("SiteLatitude Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("SiteLatitude", false);
+        private double latitude;
+        public double SiteLatitude {
+            get {
+                tl.LogMessage("SiteLatitude Get", "");
+                //throw new ASCOM.PropertyNotImplementedException("SiteLatitude", false);
+                return latitude;
             }
-            set
-            {
-                tl.LogMessage("SiteLatitude Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("SiteLatitude", true);
-            }
-        }
-
-        public double SiteLongitude
-        {
-            get
-            {
-                tl.LogMessage("SiteLongitude Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("SiteLongitude", false);
-            }
-            set
-            {
-                tl.LogMessage("SiteLongitude Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("SiteLongitude", true);
+            set {
+                tl.LogMessage("SiteLatitude Set", "");
+                if ((value < -180) || (value > 180)) {
+                    throw new ASCOM.InvalidValueException();
+                }
+                latitude = value;
             }
         }
 
-        public short SlewSettleTime
-        {
-            get
-            {
+        private double longitude;
+        public double SiteLongitude {
+            get {
+                tl.LogMessage("SiteLongitude Get", "");
+                //throw new ASCOM.PropertyNotImplementedException("SiteLongitude", false);
+                return longitude;
+            }
+            set {
+                tl.LogMessage("SiteLongitude Set", "");
+                //throw new ASCOM.PropertyNotImplementedException("SiteLongitude", true);
+                if ((value < -180) || (value > 180)) {
+                    throw new ASCOM.InvalidValueException();
+                }
+                longitude = value;
+            }
+        }
+
+        public short SlewSettleTime {
+            get {
                 tl.LogMessage("SlewSettleTime Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SlewSettleTime", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("SlewSettleTime Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("SlewSettleTime", true);
             }
         }
 
-        public void SlewToAltAz(double Azimuth, double Altitude)
-        {
+        public void SlewToAltAz(double Azimuth, double Altitude) {
             tl.LogMessage("SlewToAltAz", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToAltAz");
         }
 
-        public void SlewToAltAzAsync(double Azimuth, double Altitude)
-        {
+        public void SlewToAltAzAsync(double Azimuth, double Altitude) {
             tl.LogMessage("SlewToAltAzAsync", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToAltAzAsync");
         }
 
-        public void SlewToCoordinates(double RightAscension, double Declination)
-        {
+        public void SlewToCoordinates(double RightAscension, double Declination) {
             tl.LogMessage("SlewToCoordinates", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToCoordinates");
         }
 
-        public void SlewToCoordinatesAsync(double RightAscension, double Declination)
-        {
+        public void SlewToCoordinatesAsync(double RightAscension, double Declination) {
             tl.LogMessage("SlewToCoordinatesAsync", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToCoordinatesAsync");
         }
 
-        public void SlewToTarget()
-        {
+        public void SlewToTarget() {
             tl.LogMessage("SlewToTarget", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToTarget");
         }
 
-        public void SlewToTargetAsync()
-        {
+        public void SlewToTargetAsync() {
             tl.LogMessage("SlewToTargetAsync", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SlewToTargetAsync");
         }
 
-        public bool Slewing
-        {
-            get
-            {
+        public bool Slewing {
+            get {
                 tl.LogMessage("Slewing Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("Slewing", false);
             }
         }
 
-        public void SyncToAltAz(double Azimuth, double Altitude)
-        {
+        public void SyncToAltAz(double Azimuth, double Altitude) {
             tl.LogMessage("SyncToAltAz", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SyncToAltAz");
         }
 
-        public void SyncToCoordinates(double RightAscension, double Declination)
-        {
+        public void SyncToCoordinates(double RightAscension, double Declination) {
             tl.LogMessage("SyncToCoordinates", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
         }
 
-        public void SyncToTarget()
-        {
+        public void SyncToTarget() {
             tl.LogMessage("SyncToTarget", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("SyncToTarget");
         }
 
-        public double TargetDeclination
-        {
-            get
-            {
+        public double TargetDeclination {
+            get {
                 tl.LogMessage("TargetDeclination Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TargetDeclination", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("TargetDeclination Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TargetDeclination", true);
             }
         }
 
-        public double TargetRightAscension
-        {
-            get
-            {
+        public double TargetRightAscension {
+            get {
                 tl.LogMessage("TargetRightAscension Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TargetRightAscension", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("TargetRightAscension Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TargetRightAscension", true);
             }
         }
 
-        public bool Tracking
-        {
-            get
-            {
+        public bool Tracking {
+            get {
                 bool tracking = true;
                 tl.LogMessage("Tracking", "Get - " + tracking.ToString());
                 return tracking;
             }
-            set
-            {
+            set {
                 tl.LogMessage("Tracking Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("Tracking", true);
             }
         }
 
-        public DriveRates TrackingRate
-        {
-            get
-            {
+        public DriveRates TrackingRate {
+            get {
                 tl.LogMessage("TrackingRate Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TrackingRate", false);
             }
-            set
-            {
+            set {
                 tl.LogMessage("TrackingRate Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("TrackingRate", true);
             }
         }
 
-        public ITrackingRates TrackingRates
-        {
-            get
-            {
+        public ITrackingRates TrackingRates {
+            get {
                 ITrackingRates trackingRates = new TrackingRates();
                 tl.LogMessage("TrackingRates", "Get - ");
-                foreach (DriveRates driveRate in trackingRates)
-                {
+                foreach (DriveRates driveRate in trackingRates) {
                     tl.LogMessage("TrackingRates", "Get - " + driveRate.ToString());
                 }
                 return trackingRates;
             }
         }
 
-        public DateTime UTCDate
-        {
-            get
-            {
+        public DateTime UTCDate {
+            get {
                 DateTime utcDate = DateTime.UtcNow;
                 tl.LogMessage("TrackingRates", "Get - " + String.Format("MM/dd/yy HH:mm:ss", utcDate));
                 return utcDate;
             }
-            set
-            {
+            set {
                 tl.LogMessage("UTCDate Set", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("UTCDate", true);
             }
         }
 
-        public void Unpark()
-        {
+        public void Unpark() {
             tl.LogMessage("Unpark", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("Unpark");
         }
@@ -943,17 +893,12 @@ namespace ASCOM.funky
         /// This is harmless if the driver is already registered/unregistered.
         /// </summary>
         /// <param name="bRegister">If <c>true</c>, registers the driver, otherwise unregisters it.</param>
-        private static void RegUnregASCOM(bool bRegister)
-        {
-            using (var P = new ASCOM.Utilities.Profile())
-            {
+        private static void RegUnregASCOM(bool bRegister) {
+            using (var P = new ASCOM.Utilities.Profile()) {
                 P.DeviceType = "Telescope";
-                if (bRegister)
-                {
+                if (bRegister) {
                     P.Register(driverID, driverDescription);
-                }
-                else
-                {
+                } else {
                     P.Unregister(driverID);
                 }
             }
@@ -977,8 +922,7 @@ namespace ASCOM.funky
         /// This technique should mean that it is never necessary to manually register a driver with ASCOM.
         /// </remarks>
         [ComRegisterFunction]
-        public static void RegisterASCOM(Type t)
-        {
+        public static void RegisterASCOM(Type t) {
             RegUnregASCOM(true);
         }
 
@@ -1000,8 +944,7 @@ namespace ASCOM.funky
         /// This technique should mean that it is never necessary to manually unregister a driver from ASCOM.
         /// </remarks>
         [ComUnregisterFunction]
-        public static void UnregisterASCOM(Type t)
-        {
+        public static void UnregisterASCOM(Type t) {
             RegUnregASCOM(false);
         }
 
@@ -1010,10 +953,8 @@ namespace ASCOM.funky
         /// <summary>
         /// Returns true if there is a valid connection to the driver hardware
         /// </summary>
-        private bool IsConnected
-        {
-            get
-            {
+        private bool IsConnected {
+            get {
                 // TODO check that the driver hardware connection exists and is connected to the hardware
                 return connectedState;
             }
@@ -1023,10 +964,8 @@ namespace ASCOM.funky
         /// Use this function to throw an exception if we aren't connected to the hardware
         /// </summary>
         /// <param name="message"></param>
-        private void CheckConnected(string message)
-        {
-            if (!IsConnected)
-            {
+        private void CheckConnected(string message) {
+            if (!IsConnected) {
                 throw new ASCOM.NotConnectedException(message);
             }
         }
@@ -1034,26 +973,22 @@ namespace ASCOM.funky
         /// <summary>
         /// Read the device configuration from the ASCOM Profile store
         /// </summary>
-        internal void ReadProfile()
-        {
-            using (Profile driverProfile = new Profile())
-            {
+        internal void ReadProfile() {
+            using (Profile driverProfile = new Profile()) {
                 driverProfile.DeviceType = "Telescope";
                 traceState = Convert.ToBoolean(driverProfile.GetValue(driverID, traceStateProfileName, string.Empty, traceStateDefault));
-                comPort = driverProfile.GetValue(driverID, comPortProfileName, string.Empty, comPortDefault);
+                hostname = driverProfile.GetValue(driverID, hostnameProfileName, string.Empty, hostnameDefault);
             }
         }
 
         /// <summary>
         /// Write the device configuration to the  ASCOM  Profile store
         /// </summary>
-        internal void WriteProfile()
-        {
-            using (Profile driverProfile = new Profile())
-            {
+        internal void WriteProfile() {
+            using (Profile driverProfile = new Profile()) {
                 driverProfile.DeviceType = "Telescope";
                 driverProfile.WriteValue(driverID, traceStateProfileName, traceState.ToString());
-                driverProfile.WriteValue(driverID, comPortProfileName, comPort.ToString());
+                driverProfile.WriteValue(driverID, hostnameProfileName, hostname.ToString());
             }
         }
 

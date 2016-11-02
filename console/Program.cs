@@ -19,6 +19,51 @@ namespace ASCOM
 {
     class Program
     {
+        static ASCOM.DriverAccess.Telescope device;
+        static System.Threading.Timer MyTimer;
+
+
+        enum States { init, connect, connected, test, disconnect, disconnected };
+        static States actState;
+
+        static void CheckCondition(object state) {
+            
+            switch (actState) {
+                case States.init:
+            device.SiteLatitude = 48;
+            device.SiteLongitude = 14.28;
+                    device.Connected = true;
+                    actState = States.connect;
+                    Console.WriteLine("Init -> Connect");
+                    break;
+                case States.connect:
+                    if (device.Declination != 0) {
+                        actState = States.test;
+                        Console.WriteLine("Connect->test");
+                    }
+                    break;
+                case States.test:
+                    if (device.RightAscension != 0) {
+                        actState = States.disconnect;
+                        Console.WriteLine("test->disconnect");
+                    }
+                    break;
+                case States.disconnect:
+                    device.Connected = false;
+                    actState = States.disconnected;
+                    Console.WriteLine("disconnect->disconnected");
+                    break;
+                case States.disconnected:
+                    // stop
+                    MyTimer.Dispose();
+                    Console.WriteLine("dispose");
+                    break;
+                default:
+                    Console.WriteLine("unknown");
+                    break;
+            }
+        }
+
         static void Main(string[] args)
         {
             // Uncomment the code that's required
@@ -28,7 +73,7 @@ namespace ASCOM
             if (string.IsNullOrEmpty(id))
                 return;
             // create this device
-            ASCOM.DriverAccess.Telescope device = new ASCOM.DriverAccess.Telescope(id);
+            device = new ASCOM.DriverAccess.Telescope(id);
 #else
             // this can be replaced by this code, it avoids the chooser and creates the driver class directly.
             ASCOM.DriverAccess.Telescope device = new ASCOM.DriverAccess.Telescope("ASCOM.funky1.Telescope");
@@ -40,15 +85,12 @@ namespace ASCOM
             Console.WriteLine("DriverInfo " + device.DriverInfo);
             Console.WriteLine("driverVersion " + device.DriverVersion);
 
-            // TODO add more code to test the driver.
-            device.SiteLatitude = 48;
-            device.SiteLongitude = 14.28;
             device.Connected = true;
 
-            while (device.Declination == 0) { };
-            while (device.RightAscension == 0) { };
 
-            device.Connected = false;
+            // TODO add more code to test the driver.
+            //            MyTimer = new System.Threading.Timer(CheckCondition, null, 1000, 1000);
+
             Console.WriteLine("Press Enter to finish");
             Console.ReadLine();
         }

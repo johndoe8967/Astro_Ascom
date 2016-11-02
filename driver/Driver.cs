@@ -74,7 +74,7 @@ namespace ASCOM.funky {
         private static string driverDescription = "ASCOM Telescope Driver for ASTRO_ESP.";
 
         internal static string hostnameProfileName = "Hostname"; // Constants used for Profile persistence
-        internal static string hostnameDefault = "Astro.local";
+        internal static string hostnameDefault = "192.168.0.18";
         internal static string traceStateProfileName = "Trace Level";
         internal static string traceStateDefault = "false";
 
@@ -125,9 +125,10 @@ namespace ASCOM.funky {
             while (true) {
                 if (shouldConnect) {
                     if (!connectionEstablished) {
+                        tl.LogMessage("Telescope", "Starting connection:"+hostname);
                         var uri = new Uri("ws://" + hostname + ":80/");
-
-                        await ws.ConnectAsync(uri, CancellationToken.None);
+                        var ts = new CancellationToken();
+                        await ws.ConnectAsync(uri, ts);
                     }
 
                     var result = await ws.ReceiveAsync(segment, CancellationToken.None);
@@ -172,7 +173,10 @@ namespace ASCOM.funky {
                             break;
                     }
 
-                    connectionEstablished = true;
+                    if (connectionEstablished == false) {
+                        tl.LogMessage("Telescope", "Connected:");
+                        connectionEstablished = true;
+                    }
 
                     //await ws.ConnectAsync(uri, CancellationToken.None);
 
@@ -295,11 +299,13 @@ namespace ASCOM.funky {
                 if (value) {
                     tl.LogMessage("Connected Set", "Connecting to host " + hostname);
 
-                    var uri = new Uri("ws://" + hostname + ":80");
-
                     shouldConnect = true;
                     var clientTask1 = Client();
-                    while (!connectionEstablished) { }
+                    
+                    while (!connectionEstablished) {
+                        Thread.Sleep(100);
+                        Console.WriteLine(clientTask1.Status);
+                    }
                     connectedState = true;
 
 

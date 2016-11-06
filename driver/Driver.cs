@@ -301,7 +301,8 @@ namespace ASCOM.funky {
 
                     shouldConnect = true;
                     var clientTask1 = Client();
-                    
+                    clientTask1.ConfigureAwait(false);
+
                     while (!connectionEstablished) {
                         Thread.Sleep(100);
                         Console.WriteLine(clientTask1.Status);
@@ -714,7 +715,8 @@ namespace ASCOM.funky {
             }
         }
 
-        private double latitude;
+
+        private double latitude = 48;
         public double SiteLatitude {
             get {
                 tl.LogMessage("SiteLatitude Get", "");
@@ -730,7 +732,7 @@ namespace ASCOM.funky {
             }
         }
 
-        private double longitude;
+        private double longitude = 14.28;
         public double SiteLongitude {
             get {
                 tl.LogMessage("SiteLongitude Get", "");

@@ -162,12 +162,26 @@ namespace ASCOM.funky {
             }
 
             async void close() {
-                if (ws.State == WebSocketState.Open || ws.State == WebSocketState.Connecting) {
-                    await ws.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                switch (ws.State) {
+                    case WebSocketState.Aborted:
+                        ws.Dispose();
+                        ws = new ClientWebSocket();
+
+                        break;
+                    case WebSocketState.Open:
+                    case WebSocketState.Connecting:
+                        await ws.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                        break;
+                    default:
+                        break;
                 }
+
             }
 
             private void websocketworker() {
+                if (ws.State == WebSocketState.Aborted) {
+                    close();
+                }
                 if (ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
                     connect();
                 }
@@ -189,10 +203,13 @@ namespace ASCOM.funky {
                                         Console.WriteLine("INCR0 String could not be parsed:" + data.value);
                                     break;
                                 case "incr1":
-                                    if (double.TryParse((string)data.value, out parent.rightAscension)) {
-                                        parent.rightAscension = parent.rightAscension / (4 * 12) / 250 * 20 / 80 * 24;
-                                        parent.rightAscension = parent.SiderealTime - parent.rightAscension;
-                                        Console.WriteLine("Act: RightAscension: " + parent.rightAscension);
+                                    double temp = 0.0;
+                                    if (double.TryParse((string)data.value, out temp)) {
+                                        temp = temp / (4 * 12) / 250 * 20 / 80 * 24;
+                                        parent.rightAscension = parent.SiderealTime - temp;
+                                        if (parent.rightAscension < 0) {
+                                            parent.tl.LogMessage("Rightascension","negative");
+                                        }
                                     } else
                                         Console.WriteLine("INCR1 String could not be parsed:" + data.value);
                                     break;
@@ -568,8 +585,8 @@ namespace ASCOM.funky {
 
         public bool CanSync {
             get {
-                tl.LogMessage("CanSync", "Get - " + false.ToString());
-                return false;
+                tl.LogMessage("CanSync", "Get - " + true.ToString());
+                return true;
             }
         }
 
@@ -690,6 +707,9 @@ namespace ASCOM.funky {
         public double RightAscension {
             get {
                 //double rightAscension = 0.0;
+                if (rightAscension < 0) {
+                    rightAscension = 0.0;
+                }
                 tl.LogMessage("RightAscension", "Get - " + utilities.HoursToHMS(rightAscension));
                 return rightAscension;
             }
@@ -761,7 +781,7 @@ namespace ASCOM.funky {
         private double latitude = 48;
         public double SiteLatitude {
             get {
-                tl.LogMessage("SiteLatitude Get", "");
+//                tl.LogMessage("SiteLatitude Get", "");
                 //throw new ASCOM.PropertyNotImplementedException("SiteLatitude", false);
                 return latitude;
             }
@@ -777,7 +797,7 @@ namespace ASCOM.funky {
         private double longitude = 14.28;
         public double SiteLongitude {
             get {
-                tl.LogMessage("SiteLongitude Get", "");
+//                tl.LogMessage("SiteLongitude Get", "");
                 //throw new ASCOM.PropertyNotImplementedException("SiteLongitude", false);
                 return longitude;
             }
@@ -832,10 +852,12 @@ namespace ASCOM.funky {
             throw new ASCOM.MethodNotImplementedException("SlewToTargetAsync");
         }
 
+        private bool slew = false;
         public bool Slewing {
             get {
-                tl.LogMessage("Slewing Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("Slewing", false);
+//                tl.LogMessage("Slewing Get", "Not implemented");
+//                throw new ASCOM.PropertyNotImplementedException("Slewing", false);
+                return slew;
             }
         }
 
@@ -845,8 +867,8 @@ namespace ASCOM.funky {
         }
 
         public void SyncToCoordinates(double RightAscension, double Declination) {
-            tl.LogMessage("SyncToCoordinates", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
+            tl.LogMessage("SyncToCoordinates", "RA:"+utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
+//            throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
         }
 
         public void SyncToTarget() {

@@ -116,29 +116,33 @@ namespace ASCOM.funky {
             public object value { get; set; }
         }
 
-        async Task Client() {
-            ClientWebSocket ws = new ClientWebSocket();
+        public class worker {
+            Telescope parent;
+            ClientWebSocket ws;
+            byte[] buffer;
+            ArraySegment<byte> segment;
+            int count;
 
-            var buffer = new byte[1024];
-            var segment = new ArraySegment<byte>(buffer);
-
-            while (true) {
-                if (shouldConnect) {
-                    if (!connectionEstablished) {
-                        tl.LogMessage("Telescope", "Starting connection:"+hostname);
-                        var uri = new Uri("ws://" + hostname + ":80/");
-                        var ts = new CancellationToken();
-                        await ws.ConnectAsync(uri, ts);
-                    }
-
+            public worker (Telescope newParent) {
+                parent = newParent;
+                ws = new ClientWebSocket();
+                buffer = new byte[1024];
+                segment = new ArraySegment<byte>(buffer);
+            }
+            async void connect() {
+                    var uri = new Uri("ws://" + hostname + ":80/");
+                    var ts = new CancellationToken();
+                    await ws.ConnectAsync(uri, ts);
+            }
+            async void receive() {
+                try {
                     var result = await ws.ReceiveAsync(segment, CancellationToken.None);
-
                     if (result.MessageType == WebSocketMessageType.Close) {
-                        await ws.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                        close();
                         return;
                     }
 
-                    int count = result.Count;
+                    count = result.Count;
                     while (!result.EndOfMessage) {
                         if (count >= buffer.Length) {
                             await ws.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "That's too long", CancellationToken.None);
@@ -150,46 +154,82 @@ namespace ASCOM.funky {
                         count += result.Count;
                     }
 
+                }
+                catch {
+
+                }
+                return;
+            }
+
+            async void close() {
+                if (ws.State == WebSocketState.Open || ws.State == WebSocketState.Connecting) {
+                    await ws.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                }
+            }
+
+            private void websocketworker() {
+                if (ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
+                    connect();
+                }
+                if (ws.State == WebSocketState.Open) {
+                    receive();
+
                     var message = Encoding.UTF8.GetString(buffer, 0, count);
                     Console.WriteLine(">" + message);
-                    AstroMsg data = JsonConvert.DeserializeObject<AstroMsg>(message);
-                    switch (data.msg) {
-                        case "incr0":
-                            if (double.TryParse((string)data.value, out declination)) {
-                                declination = declination / 2000 * 2 / 67 * 360;
-                                Console.WriteLine("Act: Declination" + declination);
-                            } else
-                                Console.WriteLine("INCR0 String could not be parsed:" + data.value);
-                            break;
-                        case "incr1":
-                            if (double.TryParse((string)data.value, out rightAscension)) {
-                                rightAscension = rightAscension / (4 * 12) / 250 * 20 / 80 * 24;
-                                rightAscension = SiderealTime - rightAscension;
-                                Console.WriteLine("Act: RightAscension: " + rightAscension);
-                            } else
-                                Console.WriteLine("INCR1 String could not be parsed:" + data.value);
-                            break;
-                        default:
-                            break;
+
+                    try {
+                        AstroMsg data = JsonConvert.DeserializeObject<AstroMsg>(message);
+                        if (data != null) {
+                            switch (data.msg) {
+                                case "incr0":
+                                    if (double.TryParse((string)data.value, out parent.declination)) {
+                                        parent.declination = parent.declination / 2000 * 2 / 67 * 360;
+                                        Console.WriteLine("Act: Declination" + parent.declination);
+                                    } else
+                                        Console.WriteLine("INCR0 String could not be parsed:" + data.value);
+                                    break;
+                                case "incr1":
+                                    if (double.TryParse((string)data.value, out parent.rightAscension)) {
+                                        parent.rightAscension = parent.rightAscension / (4 * 12) / 250 * 20 / 80 * 24;
+                                        parent.rightAscension = parent.SiderealTime - parent.rightAscension;
+                                        Console.WriteLine("Act: RightAscension: " + parent.rightAscension);
+                                    } else
+                                        Console.WriteLine("INCR1 String could not be parsed:" + data.value);
+                                    break;
+                                default:
+                                    break;
+                            }
+
+                            if (parent.connectionEstablished == false) {
+                                parent.tl.LogMessage("Telescope", "Connected:");
+                                parent.connectionEstablished = true;
+                            }
+
+                        }
+                    } catch {
+
                     }
+                }
+            }
 
-                    if (connectionEstablished == false) {
-                        tl.LogMessage("Telescope", "Connected:");
-                        connectionEstablished = true;
-                    }
+            public void Client() {
+                while (true) {
+                    if (parent.shouldConnect) {
+                        websocketworker();
 
-                    //await ws.ConnectAsync(uri, CancellationToken.None);
-
-                } else {
-                    if (connectionEstablished) {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "disconnect on purpose", CancellationToken.None);
                     } else {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "disconnect on purpose", CancellationToken.None);
+                        if (parent.connectionEstablished) {
+                            close();
+                        } else {
+                            close();
+                        }
                     }
+                    Thread.Sleep(10);
                 }
             }
         }
 
+        private Thread background;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="funky"/> class.
@@ -206,6 +246,10 @@ namespace ASCOM.funky {
             utilities = new Util(); //Initialise util object
             astroUtilities = new AstroUtils(); // Initialise astro utilities object
                                                //TODO: Implement your additional construction here
+            var clientTask1 = new worker(this);
+            background = new Thread(new ThreadStart(clientTask1.Client));
+            background.Start();
+            while (!background.IsAlive) ;
 
             tl.LogMessage("Telescope", "Completed initialisation");
         }
@@ -284,6 +328,7 @@ namespace ASCOM.funky {
             utilities = null;
             astroUtilities.Dispose();
             astroUtilities = null;
+            background.Abort();
         }
 
         public bool Connected {
@@ -300,12 +345,9 @@ namespace ASCOM.funky {
                     tl.LogMessage("Connected Set", "Connecting to host " + hostname);
 
                     shouldConnect = true;
-                    var clientTask1 = Client();
-                    clientTask1.ConfigureAwait(false);
 
                     while (!connectionEstablished) {
                         Thread.Sleep(100);
-                        Console.WriteLine(clientTask1.Status);
                     }
                     connectedState = true;
 

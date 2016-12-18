@@ -120,7 +120,10 @@ namespace ASCOM.funky {
             Telescope parent;
             ClientWebSocket ws;
             byte[] buffer;
+            byte[] sendBuffer;
             ArraySegment<byte> segment;
+            ArraySegment<byte> sendSegment;
+
             int count;
             double targetRightAscension, targetDeclination;
             bool targetSent = true;
@@ -130,7 +133,9 @@ namespace ASCOM.funky {
                 parent = newParent;
                 ws = new ClientWebSocket();
                 buffer = new byte[1024];
+                sendBuffer = new byte[1024];
                 segment = new ArraySegment<byte>(buffer);
+                sendSegment = new ArraySegment<byte>(sendBuffer);
             }
             async void connect() {
                 var uri = new Uri("ws://" + hostname + ":80/");
@@ -161,77 +166,96 @@ namespace ASCOM.funky {
             async void send() {
                 if (!targetSent) {
                     AstroMsg data = new AstroMsg();
-                    data.type = "JSON";
-                    data.msg = "mode";
-                    data.value = (int)MODE.REF;
-                    var message = "{\"type\": \"ARRAY\",\"msg\":[";
-
-                    message = message + JsonConvert.SerializeObject(data);
-                    message = message + ",";
-
-                    data.msg = "target0";
-                    data.value = targetDeclination * 2000 / 2 * 67 / 360;
-
-                    message = message + JsonConvert.SerializeObject(data);
-                    message = message + ",";
-
-                    data.msg = "target1";
-                    data.value = (parent.SiderealTime - targetRightAscension) * (4 * 12) * 250 / 20 * 80 / 24;
-
-                    message = message + JsonConvert.SerializeObject(data);
-                    message = message + "]}";
-
-                    buffer = System.Text.Encoding.UTF8.GetBytes(message);
                     try {
-                        segment = new ArraySegment<byte>(buffer, 0, buffer.Length);
-                        await ws.SendAsync(segment, WebSocketMessageType.Text, true, CancellationToken.None);
+                        data.type = "JSON";
+                        data.msg = "mode";
+                        data.value = (int)MODE.REF;
+                        var message = "{\"type\": \"ARRAY\",\"msg\":[";
+
+                        message = message + JsonConvert.SerializeObject(data);
+                        message = message + ",";
+
+                        data.msg = "target0";
+                        data.value = targetDeclination * 2000 / 2 * 67 / 360;
+
+                        message = message + JsonConvert.SerializeObject(data);
+                        message = message + ",";
+
+                        data.msg = "target1";
+                        data.value = (parent.SiderealTime - targetRightAscension) * (4 * 12) * 250 / 20 * 80 / 24;
+
+                        message = message + JsonConvert.SerializeObject(data);
+                        message = message + "]}";
+
+                        sendBuffer = System.Text.Encoding.UTF8.GetBytes(message);
+
+                    } catch {
+                        Console.WriteLine("some exception?");
+                    }
+                    try {
+                        sendSegment = new ArraySegment<byte>(sendBuffer, 0, sendBuffer.Length);
+                        await ws.SendAsync(sendSegment, WebSocketMessageType.Text, true, CancellationToken.None);
                         targetSent = true;
                     }
                     catch {
+                        Console.WriteLine("some exception?");
 
                     }
                 }
                 sendPending = false;
             }
+            Task<WebSocketReceiveResult> wsrestask;
             async void receive() {
                 try {
-                    var result = await ws.ReceiveAsync(segment, CancellationToken.None);
-                    if (result.MessageType == WebSocketMessageType.Close) {
-                        close();
-                        return;
-                    }
+                    if (wsrestask ==null || wsrestask.IsCompleted) {
+                        wsrestask = ws.ReceiveAsync(segment, CancellationToken.None);
+                        await wsrestask;
 
-                    count = result.Count;
-                    while (!result.EndOfMessage) {
-                        if (count >= buffer.Length) {
-                            await ws.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "That's too long", CancellationToken.None);
+                        
+                        if (wsrestask.Result.MessageType == WebSocketMessageType.Close) {
+                            close();
                             return;
                         }
 
-                        segment = new ArraySegment<byte>(buffer, count, buffer.Length - count);
-                        result = await ws.ReceiveAsync(segment, CancellationToken.None);
-                        count += result.Count;
+                        count = wsrestask.Result.Count;
+                        while (!wsrestask.Result.EndOfMessage) {
+                            if (count >= buffer.Length) {
+                                await ws.CloseAsync(WebSocketCloseStatus.InvalidPayloadData, "That's too long", CancellationToken.None);
+                                return;
+                            }
+
+                            segment = new ArraySegment<byte>(buffer, count, buffer.Length - count);
+                            var result = await ws.ReceiveAsync(segment, CancellationToken.None);
+                            count += result.Count;
+                        }
+                    } else {
+                        Console.WriteLine("some exception?");
                     }
 
                 } catch {
+                    Console.WriteLine("some exception?");
 
                 }
                 return;
             }
 
             async void close() {
-                switch (ws.State) {
-                    case WebSocketState.Aborted:
-                        ws.Dispose();
-                        ws = new ClientWebSocket();
+                try {
+                    switch (ws.State) {
+                        case WebSocketState.Aborted:
+                            ws.Dispose();
+                            ws = new ClientWebSocket();
 
-                        break;
-                    case WebSocketState.Open:
-                    case WebSocketState.Connecting:
-                        await ws.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
-                        break;
-                    default:
-                        break;
+                            break;
+                        case WebSocketState.Open:
+                        case WebSocketState.Connecting:
+                            await ws.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "I don't do binary", CancellationToken.None);
+                            break;
+                        default:
+                            break;
+                    }
+                } catch {
+                    Console.WriteLine("some exception?");
                 }
             }
 
@@ -276,7 +300,7 @@ namespace ASCOM.funky {
 
                         }
                     } catch {
-
+                        Console.WriteLine("some exception?");
                     }
                 }
             }
@@ -301,7 +325,7 @@ namespace ASCOM.funky {
                             close();
                         }
                     }
-                    Thread.Sleep(100);
+                    Thread.Sleep(10);
                 }
             }
         }

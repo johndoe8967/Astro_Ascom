@@ -122,17 +122,76 @@ namespace ASCOM.funky {
             byte[] buffer;
             ArraySegment<byte> segment;
             int count;
+            double targetRightAscension, targetDeclination;
+            bool targetSent = true;
+            bool sendPending = false;
 
-            public worker (Telescope newParent) {
+            public worker(Telescope newParent) {
                 parent = newParent;
                 ws = new ClientWebSocket();
                 buffer = new byte[1024];
                 segment = new ArraySegment<byte>(buffer);
             }
             async void connect() {
-                    var uri = new Uri("ws://" + hostname + ":80/");
-                    var ts = new CancellationToken();
-                    await ws.ConnectAsync(uri, ts);
+                var uri = new Uri("ws://" + hostname + ":80/");
+                var ts = new CancellationToken();
+                await ws.ConnectAsync(uri, ts);
+            }
+
+            public void setTarget(double RightAscension, double Declination) {
+                targetRightAscension = RightAscension;
+                targetDeclination = Declination;
+                targetSent = false;
+                sendPending = true;
+            }
+
+            enum MODE {GOTO=0, SYNC=1, REF=2 };
+
+            /* 
+             * {
+            	"type": "ARRAY",
+	                "msg": [{
+		                "type": "JSON",
+		                "msg": "MODE",
+		                "value": "3"
+	                }]
+                }
+             */
+
+            async void send() {
+                if (!targetSent) {
+                    AstroMsg data = new AstroMsg();
+                    data.type = "JSON";
+                    data.msg = "mode";
+                    data.value = (int)MODE.REF;
+                    var message = "{\"type\": \"ARRAY\",\"msg\":[";
+
+                    message = message + JsonConvert.SerializeObject(data);
+                    message = message + ",";
+
+                    data.msg = "target0";
+                    data.value = targetDeclination * 2000 / 2 * 67 / 360;
+
+                    message = message + JsonConvert.SerializeObject(data);
+                    message = message + ",";
+
+                    data.msg = "target1";
+                    data.value = (parent.SiderealTime - targetRightAscension) * (4 * 12) * 250 / 20 * 80 / 24;
+
+                    message = message + JsonConvert.SerializeObject(data);
+                    message = message + "]}";
+
+                    buffer = System.Text.Encoding.UTF8.GetBytes(message);
+                    try {
+                        segment = new ArraySegment<byte>(buffer, 0, buffer.Length);
+                        await ws.SendAsync(segment, WebSocketMessageType.Text, true, CancellationToken.None);
+                        targetSent = true;
+                    }
+                    catch {
+
+                    }
+                }
+                sendPending = false;
             }
             async void receive() {
                 try {
@@ -154,8 +213,7 @@ namespace ASCOM.funky {
                         count += result.Count;
                     }
 
-                }
-                catch {
+                } catch {
 
                 }
                 return;
@@ -175,17 +233,11 @@ namespace ASCOM.funky {
                     default:
                         break;
                 }
-
             }
 
             private void websocketworker() {
-                if (ws.State == WebSocketState.Aborted) {
-                    close();
-                }
-                if (ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
-                    connect();
-                }
-                if (ws.State == WebSocketState.Open) {
+                if (sendPending) send();
+                else {
                     receive();
 
                     var message = Encoding.UTF8.GetString(buffer, 0, count);
@@ -208,7 +260,7 @@ namespace ASCOM.funky {
                                         temp = temp / (4 * 12) / 250 * 20 / 80 * 24;
                                         parent.rightAscension = parent.SiderealTime - temp;
                                         if (parent.rightAscension < 0) {
-                                            parent.tl.LogMessage("Rightascension","negative");
+                                            parent.tl.LogMessage("Rightascension", "negative");
                                         }
                                     } else
                                         Console.WriteLine("INCR1 String could not be parsed:" + data.value);
@@ -232,7 +284,15 @@ namespace ASCOM.funky {
             public void Client() {
                 while (true) {
                     if (parent.shouldConnect) {
-                        websocketworker();
+                        if (ws.State == WebSocketState.Aborted) {
+                            close();
+                        }
+                        if (ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
+                            connect();
+                        }
+                        if (ws.State == WebSocketState.Open) {
+                            websocketworker();
+                        }
 
                     } else {
                         if (parent.connectionEstablished) {
@@ -241,12 +301,13 @@ namespace ASCOM.funky {
                             close();
                         }
                     }
-                    Thread.Sleep(10);
+                    Thread.Sleep(100);
                 }
             }
         }
 
         private Thread background;
+        private worker clientTask1;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="funky"/> class.
@@ -263,7 +324,7 @@ namespace ASCOM.funky {
             utilities = new Util(); //Initialise util object
             astroUtilities = new AstroUtils(); // Initialise astro utilities object
                                                //TODO: Implement your additional construction here
-            var clientTask1 = new worker(this);
+            clientTask1 = new worker(this);
             background = new Thread(new ThreadStart(clientTask1.Client));
             background.Start();
             while (!background.IsAlive) ;
@@ -781,7 +842,7 @@ namespace ASCOM.funky {
         private double latitude = 48;
         public double SiteLatitude {
             get {
-//                tl.LogMessage("SiteLatitude Get", "");
+                //                tl.LogMessage("SiteLatitude Get", "");
                 //throw new ASCOM.PropertyNotImplementedException("SiteLatitude", false);
                 return latitude;
             }
@@ -797,7 +858,7 @@ namespace ASCOM.funky {
         private double longitude = 14.28;
         public double SiteLongitude {
             get {
-//                tl.LogMessage("SiteLongitude Get", "");
+                //                tl.LogMessage("SiteLongitude Get", "");
                 //throw new ASCOM.PropertyNotImplementedException("SiteLongitude", false);
                 return longitude;
             }
@@ -855,8 +916,8 @@ namespace ASCOM.funky {
         private bool slew = false;
         public bool Slewing {
             get {
-//                tl.LogMessage("Slewing Get", "Not implemented");
-//                throw new ASCOM.PropertyNotImplementedException("Slewing", false);
+                //                tl.LogMessage("Slewing Get", "Not implemented");
+                //                throw new ASCOM.PropertyNotImplementedException("Slewing", false);
                 return slew;
             }
         }
@@ -867,8 +928,9 @@ namespace ASCOM.funky {
         }
 
         public void SyncToCoordinates(double RightAscension, double Declination) {
-            tl.LogMessage("SyncToCoordinates", "RA:"+utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
-//            throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
+            tl.LogMessage("SyncToCoordinates", "RA:" + utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
+            clientTask1.setTarget(RightAscension, Declination);
+            //            throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
         }
 
         public void SyncToTarget() {
@@ -1068,3 +1130,4 @@ namespace ASCOM.funky {
 
     }
 }
+ 

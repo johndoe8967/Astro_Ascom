@@ -74,7 +74,7 @@ namespace ASCOM.funky {
         private static string driverDescription = "ASCOM Telescope Driver for ASTRO_ESP.";
 
         internal static string hostnameProfileName = "Hostname"; // Constants used for Profile persistence
-        internal static string hostnameDefault = "192.168.0.18";
+        internal static string hostnameDefault = "10.0.0.122";
         internal static string traceStateProfileName = "Trace Level";
         internal static string traceStateDefault = "false";
 
@@ -127,6 +127,7 @@ namespace ASCOM.funky {
             int count;
             double targetRightAscension, targetDeclination;
             bool targetSent = true;
+            bool targetSync = true;
             bool sendPending = false;
 
             public worker(Telescope newParent) {
@@ -149,8 +150,15 @@ namespace ASCOM.funky {
                 targetSent = false;
                 sendPending = true;
             }
+            public void syncTarget(double RightAscension, double Declination) {
+                targetRightAscension = RightAscension;
+                targetDeclination = Declination;
+                targetSync = false;
+                sendPending = true;
+            }
 
-            enum MODE {GOTO=0, SYNC=1, REF=2 };
+
+            enum MODE {GOTO=0, TRACK=1, REF=2, SYNC=4, SLEW=5 };
 
             /* 
              * {
@@ -164,12 +172,17 @@ namespace ASCOM.funky {
              */
 
             async void send() {
-                if (!targetSent) {
+                if (!targetSent || !targetSync) {
                     AstroMsg data = new AstroMsg();
                     try {
                         data.type = "JSON";
                         data.msg = "mode";
-                        data.value = (int)MODE.REF;
+                        if (!targetSent) {
+                            data.value = (int)MODE.SLEW;
+                        }
+                        if (!targetSync) {
+                            data.value = (int)MODE.REF;
+                        }
                         var message = "{\"type\": \"ARRAY\",\"msg\":[";
 
                         message = message + JsonConvert.SerializeObject(data);
@@ -195,7 +208,12 @@ namespace ASCOM.funky {
                     try {
                         sendSegment = new ArraySegment<byte>(sendBuffer, 0, sendBuffer.Length);
                         await ws.SendAsync(sendSegment, WebSocketMessageType.Text, true, CancellationToken.None);
-                        targetSent = true;
+                        if (!targetSent) {
+                            targetSent = true;
+                        }
+                        if (!targetSync) {
+                            targetSync = true;
+                        }
                     }
                     catch {
                         Console.WriteLine("some exception?");
@@ -435,7 +453,7 @@ namespace ASCOM.funky {
 
         public bool Connected {
             get {
-                tl.LogMessage("Connected Get", IsConnected.ToString());
+//                tl.LogMessage("Connected Get", IsConnected.ToString());
                 return IsConnected;
             }
             set {
@@ -664,7 +682,7 @@ namespace ASCOM.funky {
         public bool CanSlewAsync {
             get {
                 tl.LogMessage("CanSlewAsync", "Get - " + false.ToString());
-                return false;
+                return true;
             }
         }
 
@@ -846,7 +864,7 @@ namespace ASCOM.funky {
                 siderealTime += SiteLongitude / 360.0 * 24.0;
                 // reduce to the range 0 to 24 hours
                 siderealTime = siderealTime % 24.0;
-                tl.LogMessage("SiderealTime", "Get - " + siderealTime.ToString());
+//                tl.LogMessage("SiderealTime", "Get - " + siderealTime.ToString());
                 return siderealTime;
             }
         }
@@ -918,13 +936,15 @@ namespace ASCOM.funky {
         }
 
         public void SlewToCoordinates(double RightAscension, double Declination) {
-            tl.LogMessage("SlewToCoordinates", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("SlewToCoordinates");
+            tl.LogMessage("SlewToCoordinates", "RA:" + utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
+            clientTask1.setTarget(RightAscension, Declination);
+            //throw new ASCOM.MethodNotImplementedException("SlewToCoordinates");
         }
 
         public void SlewToCoordinatesAsync(double RightAscension, double Declination) {
-            tl.LogMessage("SlewToCoordinatesAsync", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("SlewToCoordinatesAsync");
+            tl.LogMessage("SlewToCoordinatesAsync", "RA:" + utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
+            clientTask1.setTarget(RightAscension, Declination);
+
         }
 
         public void SlewToTarget() {
@@ -953,7 +973,7 @@ namespace ASCOM.funky {
 
         public void SyncToCoordinates(double RightAscension, double Declination) {
             tl.LogMessage("SyncToCoordinates", "RA:" + utilities.HoursToHMS(RightAscension) + " Dec:" + Declination.ToString());
-            clientTask1.setTarget(RightAscension, Declination);
+            clientTask1.syncTarget(RightAscension, Declination);
             //            throw new ASCOM.MethodNotImplementedException("SyncToCoordinates");
         }
 

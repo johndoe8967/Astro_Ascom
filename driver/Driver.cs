@@ -128,6 +128,7 @@ namespace ASCOM.funky {
             double targetRightAscension, targetDeclination;
             bool targetSent = true;
             bool targetSync = true;
+            bool targetAborted = true;
             bool sendPending = false;
 
             public worker(Telescope newParent) {
@@ -156,6 +157,10 @@ namespace ASCOM.funky {
                 targetSync = false;
                 sendPending = true;
             }
+            public void sendAbortSlew() {
+                targetAborted = false;
+                sendPending = true;
+            }
 
 
             enum MODE {GOTO=0, TRACK=1, REF=2, SYNC=4, SLEW=5 };
@@ -172,41 +177,57 @@ namespace ASCOM.funky {
              */
 
             async void send() {
-                if (!targetSent || !targetSync) {
+                if (!targetSent || !targetSync || !targetAborted) {
                     AstroMsg data = new AstroMsg();
                     try {
                         data.type = "JSON";
                         data.msg = "mode";
                         if (!targetSent) {
                             data.value = (int)MODE.SLEW;
+                            parent.slew = true;
                         }
                         if (!targetSync) {
                             data.value = (int)MODE.REF;
                         }
+                        if (!targetAborted) {
+                            data.value = (int)MODE.TRACK;
+                        }
                         var message = "{\"type\": \"ARRAY\",\"msg\":[";
 
                         message = message + JsonConvert.SerializeObject(data);
-                        message = message + ",";
+                        if (targetAborted) {
+                            message = message + ",";
 
-                        data.msg = "target0";
-                        data.value = targetDeclination * 2000 / 2 * 67 / 360;
+                            data.msg = "target0";
+                            data.value = targetDeclination * 2000 / 2 * 67 / 360;
 
-                        message = message + JsonConvert.SerializeObject(data);
-                        message = message + ",";
+                            message = message + JsonConvert.SerializeObject(data);
+                            message = message + ",";
 
-                        data.msg = "target1";
-                        var positiontime   = parent.SiderealTime - parent.rightAscension;
-                        var temp = parent.SiderealTime - targetRightAscension;
-                        if (temp - positiontime >= 12) {
-                            temp = temp - 24;
+                            data.msg = "target1";
+                            var positiontime = parent.SiderealTime - parent.rightAscension;
+                            var temp = parent.SiderealTime - targetRightAscension;
+                            if (!targetSync) {
+                                if (temp > 12) {
+                                    temp = temp - 24;
+                                }
+                                //                            if (temp < -12) {
+                                //                                temp = temp + 24;
+                                //                            }
+                            }
+                            if (!targetSent) {
+                                if (temp - positiontime >= 12) {
+                                    temp = temp - 24;
+                                }
+                                //                            if (temp - positiontime <= -12) {
+                                //                                temp = temp + 24;
+                                //                            }
+                            }
+
+                            data.value = (temp) * (4 * 12) * 250 / 20 * 80 / 24;
+
+                            message = message + JsonConvert.SerializeObject(data);
                         }
-                        if (temp - positiontime <= -12) {
-                            temp = temp + 24;
-                        }
-
-                        data.value = (temp) * (4 * 12) * 250 / 20 * 80 / 24;
-
-                        message = message + JsonConvert.SerializeObject(data);
                         message = message + "]}";
 
                         sendBuffer = System.Text.Encoding.UTF8.GetBytes(message);
@@ -222,6 +243,9 @@ namespace ASCOM.funky {
                         }
                         if (!targetSync) {
                             targetSync = true;
+                        }
+                        if (!targetAborted) {
+                            targetAborted = true;
                         }
                     }
                     catch {
@@ -310,8 +334,21 @@ namespace ASCOM.funky {
                                     if (double.TryParse((string)data.value, out temp)) {
                                         temp = temp / (4 * 12) / 250 * 20 / 80 * 24;
                                         parent.rightAscension = parent.SiderealTime - temp;
+                                        if (parent.rightAscension > 24) {
+                                            parent.rightAscension = parent.rightAscension - 24;
+                                        }
                                         if (parent.rightAscension < 0) {
-                                            parent.tl.LogMessage("Rightascension", "negative");
+                                            parent.rightAscension = parent.rightAscension + 24;
+                                            //parent.tl.LogMessage("Rightascension", "negative");
+                                        }
+                                    } else
+                                        Console.WriteLine("INCR1 String could not be parsed:" + data.value);
+                                    break;
+                                case "mode":
+                                    int value = 0;
+                                    if (int.TryParse((string)data.value, out value)) {
+                                        if (value == (int)MODE.TRACK) {
+                                            parent.slew = false;
                                         }
                                     } else
                                         Console.WriteLine("INCR1 String could not be parsed:" + data.value);
@@ -536,8 +573,9 @@ namespace ASCOM.funky {
 
         #region ITelescope Implementation
         public void AbortSlew() {
-            tl.LogMessage("AbortSlew", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("AbortSlew");
+            tl.LogMessage("AbortSlew", "aborted");
+            slew = false;
+            clientTask1.sendAbortSlew();
         }
 
         public AlignmentModes AlignmentMode {
@@ -690,7 +728,7 @@ namespace ASCOM.funky {
 
         public bool CanSlewAsync {
             get {
-                tl.LogMessage("CanSlewAsync", "Get - " + false.ToString());
+                tl.LogMessage("CanSlewAsync", "Get - " + true.ToString());
                 return true;
             }
         }

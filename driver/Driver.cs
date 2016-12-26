@@ -195,7 +195,16 @@ namespace ASCOM.funky {
                         message = message + ",";
 
                         data.msg = "target1";
-                        data.value = (parent.SiderealTime - targetRightAscension) * (4 * 12) * 250 / 20 * 80 / 24;
+                        var positiontime   = parent.SiderealTime - parent.rightAscension;
+                        var temp = parent.SiderealTime - targetRightAscension;
+                        if (temp - positiontime >= 12) {
+                            temp = temp - 24;
+                        }
+                        if (temp - positiontime <= -12) {
+                            temp = temp + 24;
+                        }
+
+                        data.value = (temp) * (4 * 12) * 250 / 20 * 80 / 24;
 
                         message = message + JsonConvert.SerializeObject(data);
                         message = message + "]}";

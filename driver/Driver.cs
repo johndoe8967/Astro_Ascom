@@ -126,9 +126,9 @@ namespace ASCOM.funky {
 
             int count;
             double targetRightAscension, targetDeclination;
-            bool targetSent = true;
-            bool targetSync = true;
-            bool targetAborted = true;
+            bool sendModeSlew = true;
+            bool sendModeSync = true;
+            bool sendModeTrack = true;
             bool sendPending = false;
 
             public worker(Telescope newParent) {
@@ -148,17 +148,17 @@ namespace ASCOM.funky {
             public void setTarget(double RightAscension, double Declination) {
                 targetRightAscension = RightAscension;
                 targetDeclination = Declination;
-                targetSent = false;
+                sendModeSlew = true;
                 sendPending = true;
             }
             public void syncTarget(double RightAscension, double Declination) {
                 targetRightAscension = RightAscension;
                 targetDeclination = Declination;
-                targetSync = false;
+                sendModeSync = true;
                 sendPending = true;
             }
-            public void sendAbortSlew() {
-                targetAborted = false;
+            public void sendTracking() {
+                sendModeTrack = true;
                 sendPending = true;
             }
 
@@ -177,25 +177,24 @@ namespace ASCOM.funky {
              */
 
             async void send() {
-                if (!targetSent || !targetSync || !targetAborted) {
+                if (sendModeSlew || sendModeSync || sendModeTrack) {
                     AstroMsg data = new AstroMsg();
                     try {
                         data.type = "JSON";
                         data.msg = "mode";
-                        if (!targetSent) {
+                        if (sendModeSlew) {
                             data.value = (int)MODE.SLEW;
-                            parent.slew = true;
                         }
-                        if (!targetSync) {
+                        if (sendModeSync) {
                             data.value = (int)MODE.REF;
                         }
-                        if (!targetAborted) {
+                        if (sendModeTrack) {
                             data.value = (int)MODE.TRACK;
                         }
                         var message = "{\"type\": \"ARRAY\",\"msg\":[";
 
                         message = message + JsonConvert.SerializeObject(data);
-                        if (targetAborted) {
+                        if (!sendModeTrack) {
                             message = message + ",";
 
                             data.msg = "target0";
@@ -207,7 +206,7 @@ namespace ASCOM.funky {
                             data.msg = "target1";
                             var positiontime = parent.SiderealTime - parent.rightAscension;
                             var temp = parent.SiderealTime - targetRightAscension;
-                            if (!targetSync) {
+                            if (sendModeSync) {
                                 if (temp > 12) {
                                     temp = temp - 24;
                                 }
@@ -215,7 +214,7 @@ namespace ASCOM.funky {
                                 //                                temp = temp + 24;
                                 //                            }
                             }
-                            if (!targetSent) {
+                            if (sendModeSlew) {
                                 if (temp - positiontime >= 12) {
                                     temp = temp - 24;
                                 }
@@ -238,14 +237,14 @@ namespace ASCOM.funky {
                     try {
                         sendSegment = new ArraySegment<byte>(sendBuffer, 0, sendBuffer.Length);
                         await ws.SendAsync(sendSegment, WebSocketMessageType.Text, true, CancellationToken.None);
-                        if (!targetSent) {
-                            targetSent = true;
+                        if (sendModeSlew) {
+                            sendModeSlew = false;
                         }
-                        if (!targetSync) {
-                            targetSync = true;
+                        if (sendModeSync) {
+                            sendModeSync = false;
                         }
-                        if (!targetAborted) {
-                            targetAborted = true;
+                        if (sendModeTrack) {
+                            sendModeTrack = false;
                         }
                     }
                     catch {
@@ -347,8 +346,22 @@ namespace ASCOM.funky {
                                 case "mode":
                                     int value = 0;
                                     if (int.TryParse((string)data.value, out value)) {
-                                        if (value == (int)MODE.TRACK) {
-                                            parent.slew = false;
+                                        switch ((MODE)value) {
+                                            case MODE.TRACK:
+                                                parent.slew = false;
+                                                parent.track = true;
+                                                break;
+
+                                            case MODE.SLEW:
+                                            case MODE.GOTO:
+                                                parent.slew = true;
+                                                parent.track = false;
+                                                break;
+
+                                            default:
+                                                parent.track = false;
+                                                parent.slew = false;
+                                                break;
                                         }
                                     } else
                                         Console.WriteLine("INCR1 String could not be parsed:" + data.value);
@@ -575,7 +588,7 @@ namespace ASCOM.funky {
         public void AbortSlew() {
             tl.LogMessage("AbortSlew", "aborted");
             slew = false;
-            clientTask1.sendAbortSlew();
+            clientTask1.sendTracking();
         }
 
         public AlignmentModes AlignmentMode {
@@ -620,7 +633,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public IAxisRates AxisRates(TelescopeAxes Axis) {
+        public IAxisRates AxisRates(TelescopeAxes Axis) {           //TODO: EQAlign
             tl.LogMessage("AxisRates", "Get - " + Axis.ToString());
             return new AxisRates(Axis);
         }
@@ -639,7 +652,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public bool CanMoveAxis(TelescopeAxes Axis) {
+        public bool CanMoveAxis(TelescopeAxes Axis) {               //TODO: EQAlign
             tl.LogMessage("CanMoveAxis", "Get - " + Axis.ToString());
             switch (Axis) {
                 case TelescopeAxes.axisPrimary: return false;
@@ -656,7 +669,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public bool CanPulseGuide {
+        public bool CanPulseGuide {         //TODO: EQAlign
             get {
                 tl.LogMessage("CanPulseGuide", "Get - " + false.ToString());
                 return false;
@@ -670,7 +683,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public bool CanSetGuideRates {
+        public bool CanSetGuideRates {      //TODO: EQAlign
             get {
                 tl.LogMessage("CanSetGuideRates", "Get - " + false.ToString());
                 return false;
@@ -700,8 +713,8 @@ namespace ASCOM.funky {
 
         public bool CanSetTracking {
             get {
-                tl.LogMessage("CanSetTracking", "Get - " + false.ToString());
-                return false;
+                tl.LogMessage("CanSetTracking", "Get - " + true.ToString());
+                return true;
             }
         }
 
@@ -810,7 +823,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public double GuideRateDeclination {
+        public double GuideRateDeclination {        //TODO: EQAlign
             get {
                 tl.LogMessage("GuideRateDeclination Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateDeclination", false);
@@ -821,7 +834,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public double GuideRateRightAscension {
+        public double GuideRateRightAscension {     //TODO: EQAlign
             get {
                 tl.LogMessage("GuideRateRightAscension Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("GuideRateRightAscension", false);
@@ -839,7 +852,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public void MoveAxis(TelescopeAxes Axis, double Rate) {
+        public void MoveAxis(TelescopeAxes Axis, double Rate) {             //TODO: EQAlign
             tl.LogMessage("MoveAxis", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("MoveAxis");
         }
@@ -849,7 +862,7 @@ namespace ASCOM.funky {
             throw new ASCOM.MethodNotImplementedException("Park");
         }
 
-        public void PulseGuide(GuideDirections Direction, int Duration) {
+        public void PulseGuide(GuideDirections Direction, int Duration) {       //TODO: EQAlign
             tl.LogMessage("PulseGuide", "Not implemented");
             throw new ASCOM.MethodNotImplementedException("PulseGuide");
         }
@@ -1000,8 +1013,8 @@ namespace ASCOM.funky {
         }
 
         public void SlewToTargetAsync() {
-            tl.LogMessage("SlewToTargetAsync", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("SlewToTargetAsync");
+            tl.LogMessage("SlewToTargetAsync", "RA:" + utilities.HoursToHMS(targetRightAscension) + " Dec:" + targetDeclination.ToString());
+            clientTask1.setTarget(targetRightAscension, targetDeclination);
         }
 
         private bool slew = false;
@@ -1025,41 +1038,44 @@ namespace ASCOM.funky {
         }
 
         public void SyncToTarget() {
-            tl.LogMessage("SyncToTarget", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("SyncToTarget");
+            tl.LogMessage("SyncToTarget", "RA:" + utilities.HoursToHMS(targetRightAscension) + " Dec:" + targetDeclination.ToString());
+            clientTask1.syncTarget(targetRightAscension, targetDeclination);
+            //              throw new ASCOM.MethodNotImplementedException("SyncToTarget");
         }
 
+        private double targetDeclination;
         public double TargetDeclination {
             get {
-                tl.LogMessage("TargetDeclination Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TargetDeclination", false);
+                tl.LogMessage("TargetDeclination Get", "Dec:" + targetDeclination.ToString());
+                return targetDeclination;
             }
             set {
-                tl.LogMessage("TargetDeclination Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TargetDeclination", true);
+                targetDeclination = value;
+                tl.LogMessage("TargetDeclination Set", "Dec:" + targetDeclination.ToString());
             }
         }
 
-        public double TargetRightAscension {
+        private double targetRightAscension;
+        public double TargetRightAscension {           
             get {
-                tl.LogMessage("TargetRightAscension Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TargetRightAscension", false);
+                tl.LogMessage("TargetRightAscension Get", "RA:" + utilities.HoursToHMS(targetRightAscension));
+                return targetRightAscension;
             }
             set {
-                tl.LogMessage("TargetRightAscension Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TargetRightAscension", true);
+                targetRightAscension = value;
+                tl.LogMessage("TargetRightAscension Set", "RA:" + utilities.HoursToHMS(targetRightAscension));
             }
         }
 
+        private bool track = false;
         public bool Tracking {
             get {
-                bool tracking = true;
-                tl.LogMessage("Tracking", "Get - " + tracking.ToString());
-                return tracking;
+                tl.LogMessage("Tracking", "Get - " + track.ToString());
+                return track;
             }
             set {
                 tl.LogMessage("Tracking Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("Tracking", true);
+                clientTask1.sendTracking();
             }
         }
 

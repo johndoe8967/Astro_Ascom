@@ -74,7 +74,7 @@ namespace ASCOM.funky {
         private static string driverDescription = "ASCOM Telescope Driver for ASTRO_ESP.";
 
         internal static string hostnameProfileName = "Hostname"; // Constants used for Profile persistence
-        internal static string hostnameDefault = "10.0.0.122";
+        internal static string hostnameDefault = "astro.home";
         internal static string traceStateProfileName = "Trace Level";
         internal static string traceStateDefault = "false";
 
@@ -175,7 +175,7 @@ namespace ASCOM.funky {
 
 
 
-            enum MODE {GOTO=0, TRACK=1, REF=2, SYNC=4, SLEW=5 };
+            enum MODE {GOTO=0, TRACK=1, SYNC=2, SLEW=5 };
 
             /* 
              * {
@@ -198,7 +198,7 @@ namespace ASCOM.funky {
                             data.value = (int)MODE.SLEW;
                         }
                         if (sendModeSync) {
-                            data.value = (int)MODE.REF;
+                            data.value = (int)MODE.SYNC;
                         }
                         if (sendModeTrack) {
                             data.value = (int)MODE.TRACK;

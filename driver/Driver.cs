@@ -91,6 +91,7 @@ namespace ASCOM.funky {
         private double rightAscension;
         private double declination;
 
+
         /// <summary>
         /// Private variable to hold an ASCOM Utilities object
         /// </summary>
@@ -146,6 +147,8 @@ namespace ASCOM.funky {
             }
 
             public void setTarget(double RightAscension, double Declination) {
+                parent.DECrate = parent.allowedDECRates[1].Maximum;
+                parent.RArate = parent.allowedRARates[1].Maximum;
                 targetRightAscension = RightAscension;
                 targetDeclination = Declination;
                 sendModeSlew = true;
@@ -161,6 +164,15 @@ namespace ASCOM.funky {
                 sendModeTrack = true;
                 sendPending = true;
             }
+            public void sendMoveAxis() {
+                if (parent.RArate != 0 || parent.DECrate != 0) {  
+                    sendModeSlew = true;
+                    sendPending = true;
+                } else {
+                    sendTracking();
+                }
+            }
+
 
 
             enum MODE {GOTO=0, TRACK=1, REF=2, SYNC=4, SLEW=5 };
@@ -196,6 +208,18 @@ namespace ASCOM.funky {
                         message = message + JsonConvert.SerializeObject(data);
                         if (!sendModeTrack) {
                             message = message + ",";
+
+                            data.msg = "Rate0";
+                            data.value = parent.DECrate; //TODO: convert unit
+
+                            message = message + JsonConvert.SerializeObject(data);
+                            message = message + ",";
+                            data.msg = "Rate1";
+                            data.value = parent.RArate; //TODO: convert unit
+
+                            message = message + JsonConvert.SerializeObject(data);
+                            message = message + ",";
+
 
                             data.msg = "target0";
                             data.value = targetDeclination * 2000 / 2 * 67 / 360;
@@ -424,7 +448,7 @@ namespace ASCOM.funky {
             connectedState = false; // Initialise connected to false
             utilities = new Util(); //Initialise util object
             astroUtilities = new AstroUtils(); // Initialise astro utilities object
-                                               //TODO: Implement your additional construction here
+
             clientTask1 = new worker(this);
             background = new Thread(new ThreadStart(clientTask1.Client));
             background.Start();
@@ -633,7 +657,7 @@ namespace ASCOM.funky {
             }
         }
 
-        public IAxisRates AxisRates(TelescopeAxes Axis) {           //TODO: EQAlign
+        public IAxisRates AxisRates(TelescopeAxes Axis) {
             tl.LogMessage("AxisRates", "Get - " + Axis.ToString());
             return new AxisRates(Axis);
         }
@@ -652,11 +676,11 @@ namespace ASCOM.funky {
             }
         }
 
-        public bool CanMoveAxis(TelescopeAxes Axis) {               //TODO: EQAlign
+        public bool CanMoveAxis(TelescopeAxes Axis) {
             tl.LogMessage("CanMoveAxis", "Get - " + Axis.ToString());
             switch (Axis) {
-                case TelescopeAxes.axisPrimary: return false;
-                case TelescopeAxes.axisSecondary: return false;
+                case TelescopeAxes.axisPrimary: return true;
+                case TelescopeAxes.axisSecondary: return true;
                 case TelescopeAxes.axisTertiary: return false;
                 default: throw new InvalidValueException("CanMoveAxis", Axis.ToString(), "0 to 2");
             }
@@ -852,9 +876,31 @@ namespace ASCOM.funky {
             }
         }
 
-        public void MoveAxis(TelescopeAxes Axis, double Rate) {             //TODO: EQAlign
-            tl.LogMessage("MoveAxis", "Not implemented");
-            throw new ASCOM.MethodNotImplementedException("MoveAxis");
+        double RArate, DECrate;
+        AxisRates allowedRARates = new AxisRates(TelescopeAxes.axisPrimary);
+        AxisRates allowedDECRates = new AxisRates(TelescopeAxes.axisSecondary);
+        public void MoveAxis(TelescopeAxes Axis, double Rate) {
+
+            tl.LogMessage("MoveAxis", Axis.ToString()+ " at Rate " + Rate);
+            switch (Axis) {
+                case TelescopeAxes.axisPrimary:
+                    if (allowedRARates.checkRate(Rate)) {
+                        RArate = Rate;
+                    } else {
+                        throw new ASCOM.InvalidValueException("Rate to high");
+                    }
+                    break;
+                case TelescopeAxes.axisSecondary:
+                    if (allowedDECRates.checkRate(Rate)) {
+                        DECrate = Rate;
+                    } else {
+                        throw new ASCOM.InvalidValueException("Rate to high");
+                    }
+                    break;
+                default:
+                    break;
+            }
+            clientTask1.sendMoveAxis();
         }
 
         public void Park() {
@@ -1020,8 +1066,6 @@ namespace ASCOM.funky {
         private bool slew = false;
         public bool Slewing {
             get {
-                //                tl.LogMessage("Slewing Get", "Not implemented");
-                //                throw new ASCOM.PropertyNotImplementedException("Slewing", false);
                 return slew;
             }
         }

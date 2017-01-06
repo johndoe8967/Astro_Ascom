@@ -96,17 +96,17 @@ namespace ASCOM.funky
             //
 
             const double maxRARate = 360 / 204;
-            const double maxDECRate = 360 / 30;
+            const double maxDECRate = 360 / 40 / 2;
             switch (axis)
             {
                 case TelescopeAxes.axisPrimary:
                     // TODO Initialize this array with any Primary axis rates that your driver may provide
                     // Example: m_Rates = new Rate[] { new Rate(10.5, 30.2), new Rate(54.0, 43.6) }
-                    this.rates = new Rate[] { new Rate(maxRARate / 10, maxRARate) };
+                    this.rates = new Rate[] { new Rate(maxRARate / 20, maxRARate) };
                     break;
                 case TelescopeAxes.axisSecondary:
                     // TODO Initialize this array with any Secondary axis rates that your driver may provide
-                    this.rates = new Rate[] { new Rate(maxDECRate / 10, maxDECRate) };
+                    this.rates = new Rate[] { new Rate(maxDECRate / 20, maxDECRate) };
                     break;
                 case TelescopeAxes.axisTertiary:
                     // TODO Initialize this array with any Tertiary axis rates that your driver may provide

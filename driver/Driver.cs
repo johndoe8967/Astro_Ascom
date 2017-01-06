@@ -127,9 +127,10 @@ namespace ASCOM.funky {
 
             int count;
             double targetRightAscension, targetDeclination;
-            bool sendModeSlew = true;
-            bool sendModeSync = true;
-            bool sendModeTrack = true;
+            bool sendModeSlew = false;
+            bool sendModeSync = false;
+            bool sendModeTrack = false;
+            bool sendModeGoto = false;
             bool sendPending = false;
 
             public worker(Telescope newParent) {
@@ -151,25 +152,36 @@ namespace ASCOM.funky {
                 parent.RArate = parent.allowedRARates[1].Maximum;
                 targetRightAscension = RightAscension;
                 targetDeclination = Declination;
+                sendModeTrack = false;
                 sendModeSlew = true;
+                sendModeSync = false;
                 sendPending = true;
             }
             public void syncTarget(double RightAscension, double Declination) {
+                parent.DECrate = parent.allowedDECRates[1].Maximum;
+                parent.RArate = parent.allowedRARates[1].Maximum;
                 targetRightAscension = RightAscension;
                 targetDeclination = Declination;
+                sendModeTrack = false;
+                sendModeSlew = false;
                 sendModeSync = true;
                 sendPending = true;
             }
-            public void sendTracking() {
-                sendModeTrack = true;
+            public void sendTracking(bool value) {
+                sendModeTrack = value;
+                sendModeGoto = !value;
+                sendModeSlew = false;
+                sendModeSync = false;
                 sendPending = true;
             }
             public void sendMoveAxis() {
-                if (parent.RArate != 0 || parent.DECrate != 0) {  
+                if (parent.RArate != 0 || parent.DECrate != 0) {
+                    sendModeTrack = false;
                     sendModeSlew = true;
+                    sendModeSync = false;
                     sendPending = true;
                 } else {
-                    sendTracking();
+                    sendTracking(true);
                 }
             }
 
@@ -189,7 +201,7 @@ namespace ASCOM.funky {
              */
 
             async void send() {
-                if (sendModeSlew || sendModeSync || sendModeTrack) {
+                if (sendModeSlew || sendModeSync || sendModeTrack || sendModeGoto) {
                     AstroMsg data = new AstroMsg();
                     try {
                         data.type = "JSON";
@@ -203,19 +215,22 @@ namespace ASCOM.funky {
                         if (sendModeTrack) {
                             data.value = (int)MODE.TRACK;
                         }
+                        if (sendModeGoto) {
+                            data.value = (int)MODE.GOTO;
+                        }
                         var message = "{\"type\": \"ARRAY\",\"msg\":[";
 
                         message = message + JsonConvert.SerializeObject(data);
-                        if (!sendModeTrack) {
+                        if (!sendModeTrack && !sendModeGoto) {
                             message = message + ",";
 
                             data.msg = "Rate0";
-                            data.value = parent.DECrate; //TODO: convert unit
+                            data.value = parent.DECrate * 2000 / 2 * 67 / 360;
 
                             message = message + JsonConvert.SerializeObject(data);
                             message = message + ",";
                             data.msg = "Rate1";
-                            data.value = parent.RArate; //TODO: convert unit
+                            data.value = parent.RArate * (4 * 12) * 250 / 20 * 80 / 360; 
 
                             message = message + JsonConvert.SerializeObject(data);
                             message = message + ",";
@@ -269,6 +284,9 @@ namespace ASCOM.funky {
                         }
                         if (sendModeTrack) {
                             sendModeTrack = false;
+                        }
+                        if (sendModeGoto) {
+                            sendModeGoto = false;
                         }
                     }
                     catch {
@@ -612,7 +630,7 @@ namespace ASCOM.funky {
         public void AbortSlew() {
             tl.LogMessage("AbortSlew", "aborted");
             slew = false;
-            clientTask1.sendTracking();
+            clientTask1.sendTracking(true);
         }
 
         public AlignmentModes AlignmentMode {
@@ -662,8 +680,11 @@ namespace ASCOM.funky {
             return new AxisRates(Axis);
         }
 
+        ASCOM.Astrometry.Transform.Transform trans;
         public double Azimuth {
             get {
+//                trans.SetJ2000(RightAscension, Declination);
+//                return trans.AzimuthTopocentric;
                 tl.LogMessage("Azimuth Get", "Not implemented");
                 throw new ASCOM.PropertyNotImplementedException("Azimuth", false);
             }
@@ -744,8 +765,8 @@ namespace ASCOM.funky {
 
         public bool CanSlew {
             get {
-                tl.LogMessage("CanSlew", "Get - " + false.ToString());
-                return false;
+                tl.LogMessage("CanSlew", "Get - " + true.ToString());
+                return true;
             }
         }
 
@@ -794,7 +815,7 @@ namespace ASCOM.funky {
         public double Declination {
             get {
                 //double declination = 0.0;
-                tl.LogMessage("Declination", "Get - " + utilities.DegreesToDMS(declination, ":", ":"));
+//                tl.LogMessage("Declination", "Get - " + utilities.DegreesToDMS(declination, ":", ":"));
                 return declination;
             }
         }
@@ -919,7 +940,7 @@ namespace ASCOM.funky {
                 if (rightAscension < 0) {
                     rightAscension = 0.0;
                 }
-                tl.LogMessage("RightAscension", "Get - " + utilities.HoursToHMS(rightAscension));
+//                tl.LogMessage("RightAscension", "Get - " + utilities.HoursToHMS(rightAscension));
                 return rightAscension;
             }
         }
@@ -987,7 +1008,7 @@ namespace ASCOM.funky {
         }
 
 
-        private double latitude = 48;
+        private double latitude = 48.312462;
         public double SiteLatitude {
             get {
                 //                tl.LogMessage("SiteLatitude Get", "");
@@ -1003,7 +1024,7 @@ namespace ASCOM.funky {
             }
         }
 
-        private double longitude = 14.28;
+        private double longitude = 14.242323;
         public double SiteLongitude {
             get {
                 //                tl.LogMessage("SiteLongitude Get", "");
@@ -1118,8 +1139,8 @@ namespace ASCOM.funky {
                 return track;
             }
             set {
-                tl.LogMessage("Tracking Set", "Not implemented");
-                clientTask1.sendTracking();
+                tl.LogMessage("Tracking Set", "Set - " + value.ToString());
+                clientTask1.sendTracking(value);
             }
         }
 

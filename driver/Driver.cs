@@ -156,6 +156,8 @@ namespace ASCOM.funky {
                 sendModeSlew = true;
                 sendModeSync = false;
                 sendPending = true;
+                parent.track = false;
+                parent.slew = true;
             }
             public void syncTarget(double RightAscension, double Declination) {
                 parent.DECrate = parent.allowedDECRates[1].Maximum;
@@ -166,6 +168,8 @@ namespace ASCOM.funky {
                 sendModeSlew = false;
                 sendModeSync = true;
                 sendPending = true;
+                parent.track = false;
+                parent.slew = false;
             }
             public void sendTracking(bool value) {
                 sendModeTrack = value;
@@ -173,6 +177,8 @@ namespace ASCOM.funky {
                 sendModeSlew = false;
                 sendModeSync = false;
                 sendPending = true;
+                parent.track = value;
+                parent.slew = false;
             }
             public void sendMoveAxis() {
                 if (parent.RArate != 0 || parent.DECrate != 0) {
@@ -180,8 +186,12 @@ namespace ASCOM.funky {
                     sendModeSlew = true;
                     sendModeSync = false;
                     sendPending = true;
+                    parent.track = false;
+                    parent.slew = true;
                 } else {
                     sendTracking(true);
+                    parent.track = true;
+                    parent.slew = false;
                 }
             }
 
@@ -207,16 +217,16 @@ namespace ASCOM.funky {
                         data.type = "JSON";
                         data.msg = "mode";
                         if (sendModeSlew) {
-                            data.value = (int)MODE.SLEW;
+                            data.value = ((int)MODE.SLEW).ToString();
                         }
                         if (sendModeSync) {
-                            data.value = (int)MODE.SYNC;
+                            data.value = ((int)MODE.SYNC).ToString();
                         }
                         if (sendModeTrack) {
-                            data.value = (int)MODE.TRACK;
+                            data.value = ((int)MODE.TRACK).ToString();
                         }
                         if (sendModeGoto) {
-                            data.value = (int)MODE.GOTO;
+                            data.value = ((int)MODE.GOTO).ToString();
                         }
                         var message = "{\"type\": \"ARRAY\",\"msg\":[";
 
@@ -276,24 +286,15 @@ namespace ASCOM.funky {
                     try {
                         sendSegment = new ArraySegment<byte>(sendBuffer, 0, sendBuffer.Length);
                         await ws.SendAsync(sendSegment, WebSocketMessageType.Text, true, CancellationToken.None);
-                        if (sendModeSlew) {
-                            sendModeSlew = false;
-                        }
-                        if (sendModeSync) {
-                            sendModeSync = false;
-                        }
-                        if (sendModeTrack) {
-                            sendModeTrack = false;
-                        }
-                        if (sendModeGoto) {
-                            sendModeGoto = false;
-                        }
-                    }
-                    catch {
+                    } catch {
                         Console.WriteLine("some exception?");
 
                     }
                 }
+                sendModeSlew = false;
+                sendModeSync = false;
+                sendModeTrack = false;
+                sendModeGoto = false;
                 sendPending = false;
             }
             Task<WebSocketReceiveResult> wsrestask;
@@ -396,8 +397,8 @@ namespace ASCOM.funky {
 
                                             case MODE.SLEW:
                                             case MODE.GOTO:
-                                                parent.slew = true;
                                                 parent.track = false;
+                                                parent.slew = true;
                                                 break;
 
                                             default:

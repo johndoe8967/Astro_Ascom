@@ -255,21 +255,14 @@ namespace ASCOM.funky {
                             data.msg = "target1";
                             var positiontime = parent.SiderealTime - parent.rightAscension;
                             var temp = parent.SiderealTime - targetRightAscension;
-                            if (sendModeSync) {
-                                if (temp > 12) {
-                                    temp = temp - 24;
-                                }
-                                //                            if (temp < -12) {
-                                //                                temp = temp + 24;
-                                //                            }
+                            if (temp > 24) {
+                                temp = temp - 24;
                             }
-                            if (sendModeSlew) {
-                                if (temp - positiontime >= 12) {
-                                    temp = temp - 24;
-                                }
-                                //                            if (temp - positiontime <= -12) {
-                                //                                temp = temp + 24;
-                                //                            }
+                            if (temp < 0) {
+                                temp = temp + 24;
+                            }
+                            if (temp - positiontime >= 12) {
+                                temp = temp - 24;
                             }
 
                             data.value = (temp) * (4 * 12) * 250 / 20 * 80 / 24;

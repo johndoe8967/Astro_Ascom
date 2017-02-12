@@ -76,10 +76,13 @@ namespace ASCOM.funky {
         internal static string hostnameProfileName = "Hostname"; // Constants used for Profile persistence
         internal static string hostnameDefault = "astro.home";
         internal static string traceStateProfileName = "Trace Level";
-        internal static string traceStateDefault = "false";
+        internal static string traceStateDefault = "true";
+        internal static string altitudeProfileName = "Altitude";
+        internal static string altitudeDefault = "260";
 
         internal static string hostname; // Variables to hold the currrent device configuration
         internal static bool traceState;
+        internal static double altitude;
 
         /// <summary>
         /// Private variable to hold the connected state
@@ -180,7 +183,7 @@ namespace ASCOM.funky {
                 parent.track = value;
                 parent.slew = false;
             }
-            public void sendMoveAxis() {
+            public void sendMoveAxis(double RightAscension, double Declination) {
                 if (parent.RArate != 0 || parent.DECrate != 0) {
                     sendModeTrack = false;
                     sendModeSlew = true;
@@ -188,6 +191,9 @@ namespace ASCOM.funky {
                     sendPending = true;
                     parent.track = false;
                     parent.slew = true;
+                    targetRightAscension = RightAscension;
+                    targetDeclination = Declination;
+
                 } else {
                     sendTracking(true);
                     parent.track = true;
@@ -424,7 +430,7 @@ namespace ASCOM.funky {
                         if (ws.State == WebSocketState.Aborted) {
                             close();
                         }
-                        if (ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
+                        if (ws.State == WebSocketState.CloseSent || ws.State == WebSocketState.Closed || ws.State == WebSocketState.None) {
                             connect();
                         }
                         if (ws.State == WebSocketState.Open) {
@@ -636,8 +642,9 @@ namespace ASCOM.funky {
 
         public double Altitude {
             get {
-                tl.LogMessage("Altitude", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("Altitude", false);
+                //tl.LogMessage("Altitude", "Not implemented");
+                return 3;                   //TODO: Remove again
+                //throw new ASCOM.PropertyNotImplementedException("Altitude", false);
             }
         }
 
@@ -674,13 +681,17 @@ namespace ASCOM.funky {
             return new AxisRates(Axis);
         }
 
-        ASCOM.Astrometry.Transform.Transform trans;
+        ASCOM.Astrometry.Transform.Transform trans = new ASCOM.Astrometry.Transform.Transform();
         public double Azimuth {
             get {
-//                trans.SetJ2000(RightAscension, Declination);
-//                return trans.AzimuthTopocentric;
-                tl.LogMessage("Azimuth Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("Azimuth", false);
+                trans.SiteLatitude = latitude;
+                trans.SiteLongitude = longitude;
+                trans.SiteElevation = 300;
+                trans.SiteTemperature = 5;
+                trans.SetJ2000(RightAscension, Declination);        //TODO: Remove again
+                return trans.AzimuthTopocentric;
+//                tl.LogMessage("Azimuth Get", "Not implemented");
+//                throw new ASCOM.PropertyNotImplementedException("Azimuth", false);
             }
         }
 
@@ -895,19 +906,25 @@ namespace ASCOM.funky {
         AxisRates allowedRARates = new AxisRates(TelescopeAxes.axisPrimary);
         AxisRates allowedDECRates = new AxisRates(TelescopeAxes.axisSecondary);
         public void MoveAxis(TelescopeAxes Axis, double Rate) {
-
-            tl.LogMessage("MoveAxis", Axis.ToString()+ " at Rate " + Rate);
             switch (Axis) {
                 case TelescopeAxes.axisPrimary:
+                    Rate = Math.Min(allowedRARates[1].Maximum, Rate);
                     if (allowedRARates.checkRate(Rate)) {
-                        RArate = Rate;
+                        RArate = Math.Abs(Rate);
+                        targetRightAscension = RightAscension + 6 * Math.Sign(Rate);
+                        targetDeclination = Declination;
                     } else {
                         throw new ASCOM.InvalidValueException("Rate to high");
                     }
                     break;
                 case TelescopeAxes.axisSecondary:
+                    Rate = Math.Min(allowedDECRates[1].Maximum, Rate);
                     if (allowedDECRates.checkRate(Rate)) {
-                        DECrate = Rate;
+                        DECrate = Math.Abs(Rate);
+                        targetRightAscension = RightAscension;
+                        targetDeclination = Declination + 90 * Math.Sign(Rate);
+                        targetDeclination = Math.Min(targetDeclination, 90);
+                        targetDeclination = Math.Max(targetDeclination, -90);
                     } else {
                         throw new ASCOM.InvalidValueException("Rate to high");
                     }
@@ -915,7 +932,8 @@ namespace ASCOM.funky {
                 default:
                     break;
             }
-            clientTask1.sendMoveAxis();
+            tl.LogMessage("MoveAxis", Axis.ToString() + " at Rate " + Rate + " RA:" + targetRightAscension.ToString() + " Dec:" + targetDeclination.ToString());
+            clientTask1.sendMoveAxis(targetRightAscension,targetDeclination);
         }
 
         public void Park() {
@@ -1138,14 +1156,17 @@ namespace ASCOM.funky {
             }
         }
 
+        DriveRates actDriveRate = DriveRates.driveSidereal;
         public DriveRates TrackingRate {
             get {
-                tl.LogMessage("TrackingRate Get", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TrackingRate", false);
+                tl.LogMessage("TrackingRate Get", actDriveRate.ToString());
+                return DriveRates.driveSidereal;
+                //throw new ASCOM.PropertyNotImplementedException("TrackingRate", false);
             }
             set {
-                tl.LogMessage("TrackingRate Set", "Not implemented");
-                throw new ASCOM.PropertyNotImplementedException("TrackingRate", true);
+                tl.LogMessage("TrackingRate Set", value.ToString());
+                actDriveRate = value;
+                //throw new ASCOM.PropertyNotImplementedException("TrackingRate", true);
             }
         }
 
@@ -1278,6 +1299,7 @@ namespace ASCOM.funky {
                 driverProfile.DeviceType = "Telescope";
                 traceState = Convert.ToBoolean(driverProfile.GetValue(driverID, traceStateProfileName, string.Empty, traceStateDefault));
                 hostname = driverProfile.GetValue(driverID, hostnameProfileName, string.Empty, hostnameDefault);
+                altitude = Convert.ToDouble(driverProfile.GetValue(driverID, altitudeProfileName, string.Empty, altitudeDefault));
             }
         }
 
@@ -1289,6 +1311,7 @@ namespace ASCOM.funky {
                 driverProfile.DeviceType = "Telescope";
                 driverProfile.WriteValue(driverID, traceStateProfileName, traceState.ToString());
                 driverProfile.WriteValue(driverID, hostnameProfileName, hostname.ToString());
+                driverProfile.WriteValue(driverID, altitudeProfileName, altitude.ToString());
             }
         }
 

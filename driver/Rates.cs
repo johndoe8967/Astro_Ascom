@@ -118,10 +118,10 @@ namespace ASCOM.funky
         #region IAxisRates Members
         public bool checkRate(double rate) {
             if (rate != 0) {
-                if (Math.Abs(rate) < this.rates[1].Minimum) {
+                if (Math.Abs(rate) < this.rates[0].Minimum) {
                     return false;
                 }
-                if (Math.Abs(rate) > this.rates[1].Maximum) {
+                if (Math.Abs(rate) > this.rates[0].Maximum) {
                     return false;
                 }
             }

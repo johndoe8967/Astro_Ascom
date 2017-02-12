@@ -643,7 +643,13 @@ namespace ASCOM.funky {
         public double Altitude {
             get {
                 //tl.LogMessage("Altitude", "Not implemented");
-                return 3;                   //TODO: Remove again
+                trans.SiteLatitude = latitude;
+                trans.SiteLongitude = longitude;
+                trans.SiteElevation = 300;
+                trans.SiteTemperature = 5;
+                trans.SetJ2000(RightAscension, Declination);        //TODO: Remove again
+                return trans.ElevationTopocentric;
+
                 //throw new ASCOM.PropertyNotImplementedException("Altitude", false);
             }
         }
